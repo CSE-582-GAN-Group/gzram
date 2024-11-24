@@ -11,6 +11,7 @@
 #include <string.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <limits.h>
 
 #include "ublksrv.h"
 #include "ublksrv_utils.h"
@@ -83,14 +84,19 @@ static void gzram_set_parameters(struct ublksrv_ctrl_dev *cdev,
   const struct ublksrv_ctrl_dev_info *info =
           ublksrv_ctrl_get_dev_info(cdev);
   struct ublk_params p = {
-          .types = UBLK_PARAM_TYPE_BASIC,
+          .types = UBLK_PARAM_TYPE_BASIC | UBLK_PARAM_TYPE_DISCARD,
           .basic = {
-                  .logical_bs_shift	= 9,
+                  .logical_bs_shift	= 12,
                   .physical_bs_shift	= 12,
                   .io_opt_shift		= 12,
                   .io_min_shift		= 9,
                   .max_sectors		= info->max_io_buf_bytes >> 9,
                   .dev_sectors		= dev->tgt.dev_size >> 9,
+          },
+          .discard = {
+                  .max_discard_sectors	= UINT_MAX >> 9,
+                  .max_discard_segments	= 1,
+                  .discard_granularity = 4096,
           },
   };
   int ret;
@@ -226,7 +232,7 @@ int main(int argc, char *argv[])
 {
   struct ublksrv_dev_data data = {
           .dev_id = -1,
-          .max_io_buf_bytes = DEF_BUF_SIZE,
+          .max_io_buf_bytes = 512 << 12,
           .nr_hw_queues = DEF_NR_HW_QUEUES,
           .queue_depth = DEF_QD,
           .tgt_type = "gzram",
