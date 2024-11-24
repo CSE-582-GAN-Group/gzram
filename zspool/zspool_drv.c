@@ -1774,6 +1774,14 @@ static int write_to_zspool(struct zram *zram, const char *src,
 	return 0;
 }
 
+static void discard_from_zspool(struct zram *zram, unsigned int index)
+{
+	zram_slot_lock(zram, index);
+	zram_free_page(zram, index);
+	zram_slot_unlock(zram, index);
+	atomic64_inc(&zram->stats.notify_free);
+}
+
 static ssize_t device_read(struct file *filp, char *buf, size_t len, loff_t *off)
 {
 	struct zram *zram;
@@ -1814,6 +1822,11 @@ device_write(struct file *filp, const char *buf, size_t len, loff_t *off)
 	zram = (struct zram*) filp->private_data;
 	src = buf;
 	index = *off;
+
+	if(len == 0) {
+		discard_from_zspool(zram, index);
+		return 0;
+	}
 
 	if(index >= zram->disksize >> PAGE_SHIFT) {
 		return -ENOMEM;
