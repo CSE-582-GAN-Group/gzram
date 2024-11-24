@@ -15,9 +15,9 @@
 #include "ublksrv.h"
 #include "ublksrv_utils.h"
 
-#define UBLKSRV_TGT_TYPE_DEMO  0
+#define UBLKSRV_TGT_TYPE_GZRAM  0
 
-struct demo_queue_info {
+struct gzram_queue_info {
   const struct ublksrv_dev *dev;
   int qid;
   pthread_t thread;
@@ -41,9 +41,9 @@ static void sig_handler(int sig)
  * can apply these APIs in their own thread context for making one ublk
  * block device.
  */
-static void *demo_null_io_handler_fn(void *data)
+static void *gzram_io_handler_fn(void *data)
 {
-  struct demo_queue_info *info = (struct demo_queue_info *)data;
+  struct gzram_queue_info *info = (struct gzram_queue_info *)data;
   const struct ublksrv_dev *dev = info->dev;
   const struct ublksrv_ctrl_dev_info *dinfo =
           ublksrv_ctrl_get_dev_info(ublksrv_get_ctrl_dev(dev));
@@ -77,7 +77,7 @@ static void *demo_null_io_handler_fn(void *data)
   return NULL;
 }
 
-static void demo_null_set_parameters(struct ublksrv_ctrl_dev *cdev,
+static void gzram_set_parameters(struct ublksrv_ctrl_dev *cdev,
                                      const struct ublksrv_dev *dev)
 {
   const struct ublksrv_ctrl_dev_info *info =
@@ -105,17 +105,17 @@ static void demo_null_set_parameters(struct ublksrv_ctrl_dev *cdev,
             info->dev_id, ret);
 }
 
-static int demo_null_io_handler(struct ublksrv_ctrl_dev *ctrl_dev)
+static int gzram_io_handler(struct ublksrv_ctrl_dev *ctrl_dev)
 {
   int ret, i;
   const struct ublksrv_dev *dev;
-  struct demo_queue_info *info_array;
+  struct gzram_queue_info *info_array;
   void *thread_ret;
   const struct ublksrv_ctrl_dev_info *dinfo =
           ublksrv_ctrl_get_dev_info(ctrl_dev);
 
-  info_array = (struct demo_queue_info *)
-          calloc(sizeof(struct demo_queue_info), dinfo->nr_hw_queues);
+  info_array = (struct gzram_queue_info *)
+          calloc(sizeof(struct gzram_queue_info), dinfo->nr_hw_queues);
   if (!info_array)
     return -ENOMEM;
 
@@ -129,11 +129,11 @@ static int demo_null_io_handler(struct ublksrv_ctrl_dev *ctrl_dev)
     info_array[i].dev = dev;
     info_array[i].qid = i;
     pthread_create(&info_array[i].thread, NULL,
-                   demo_null_io_handler_fn,
+                   gzram_io_handler_fn,
                    &info_array[i]);
   }
 
-  demo_null_set_parameters(ctrl_dev, dev);
+  gzram_set_parameters(ctrl_dev, dev);
 
   /* everything is fine now, start us */
   ret = ublksrv_ctrl_start_dev(ctrl_dev, getpid());
@@ -161,14 +161,14 @@ static int ublksrv_start_daemon(struct ublksrv_ctrl_dev *ctrl_dev)
   if (ublksrv_ctrl_get_affinity(ctrl_dev) < 0)
     return -1;
 
-  ret = demo_null_io_handler(ctrl_dev);
+  ret = gzram_io_handler(ctrl_dev);
 
   return ret;
 }
 
 
 
-static int demo_init_tgt(struct ublksrv_dev *dev, int type, int argc,
+static int gzram_init_tgt(struct ublksrv_dev *dev, int type, int argc,
                          char *argv[])
 {
   const struct ublksrv_ctrl_dev_info *info =
@@ -180,7 +180,7 @@ static int demo_init_tgt(struct ublksrv_dev *dev, int type, int argc,
   strcpy(tgt_json.name, "null");
 
 
-  if (type != UBLKSRV_TGT_TYPE_DEMO)
+  if (type != UBLKSRV_TGT_TYPE_GZRAM)
     return -1;
 
   tgt_json.dev_size = tgt->dev_size = 250UL * 1024 * 1024 * 1024;
@@ -193,7 +193,7 @@ static int demo_init_tgt(struct ublksrv_dev *dev, int type, int argc,
   return 0;
 }
 
-static int demo_handle_io_async(const struct ublksrv_queue *q,
+static int gzram_handle_io_async(const struct ublksrv_queue *q,
                                 const struct ublk_io_data *data)
 {
   const struct ublksrv_io_desc *iod = data->iod;
@@ -213,11 +213,11 @@ void null_free_io_buf(const struct ublksrv_queue *q, void *buf, int tag)
   free(buf);
 }
 
-static struct ublksrv_tgt_type demo_tgt_type = {
-        .type	= UBLKSRV_TGT_TYPE_DEMO,
-        .name	=  "demo_null",
-        .init_tgt = demo_init_tgt,
-        .handle_io_async = demo_handle_io_async,
+static struct ublksrv_tgt_type gzram_tgt_type = {
+        .type	= UBLKSRV_TGT_TYPE_GZRAM,
+        .name	=  "gzram",
+        .init_tgt = gzram_init_tgt,
+        .handle_io_async = gzram_handle_io_async,
         //.alloc_io_buf = null_alloc_io_buf,
         //.free_io_buf = null_free_io_buf,
 };
@@ -229,8 +229,8 @@ int main(int argc, char *argv[])
           .max_io_buf_bytes = DEF_BUF_SIZE,
           .nr_hw_queues = DEF_NR_HW_QUEUES,
           .queue_depth = DEF_QD,
-          .tgt_type = "demo_null",
-          .tgt_ops = &demo_tgt_type,
+          .tgt_type = "gzram",
+          .tgt_ops = &gzram_tgt_type,
           .flags = 0,
   };
   struct ublksrv_ctrl_dev *dev;
@@ -261,8 +261,8 @@ int main(int argc, char *argv[])
     error(EXIT_FAILURE, errno, "signal");
 
   if (use_buf) {
-    demo_tgt_type.alloc_io_buf = null_alloc_io_buf;
-    demo_tgt_type.free_io_buf = null_free_io_buf;
+    gzram_tgt_type.alloc_io_buf = null_alloc_io_buf;
+    gzram_tgt_type.free_io_buf = null_free_io_buf;
   }
 
   pthread_mutex_init(&jbuf_lock, NULL);
