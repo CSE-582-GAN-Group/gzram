@@ -2048,7 +2048,7 @@ static int zram_remove(struct zram *zram)
 //		zram_reset_device(zram);
 //	}
 //
-//	pr_info("Removed device: %s\n", zram->cdev_dev.kobj.name);
+	pr_info("Removed device: %s\n", zram->cdev_dev.kobj.name);
 //
 //	del_gendisk(zram->disk);
 //
@@ -2060,17 +2060,28 @@ static int zram_remove(struct zram *zram)
 //	 * and del_gendisk(), so run the last reset to avoid leaking
 //	 * anything allocated with disksize_store()
 //	 */
-//	zram_reset_device(zram);
+	zram_reset_device(zram);
+
+	cdev_device_del(&zram->cdev, &zram->cdev_dev);
+//	put_device(&zram->cdev_dev);
 //
 //	put_disk(zram->disk);
-//	kfree(zram);
+	kfree(zram);
 	return 0;
 }
 
 static void zram_cdev_rel(struct device *dev)
 {
-	struct zram *zram = container_of(dev, struct zram, cdev_dev);
-  kfree(zram);
+	struct zram *zram;
+
+	printk("zram_cdev_rel called\n");
+
+	mutex_lock(&zram_index_mutex);
+	idr_remove(&zram_index_idr, MINOR(dev->devt));
+	mutex_unlock(&zram_index_mutex);
+
+	zram = container_of(dev, struct zram, cdev_dev);
+  	kfree(zram);
 }
 
 /* zram-control sysfs attributes */
@@ -2154,7 +2165,7 @@ static void destroy_devices(void)
 	idr_for_each(&zram_index_idr, &zram_remove_cb, NULL);
 	zram_debugfs_destroy();
 	idr_destroy(&zram_index_idr);
-  class_unregister(&zram_control_class);
+  	class_unregister(&zram_chr_class);
 	unregister_chrdev_region(zram_chr_devt, ZRAM_MINORS);
 //	cpuhp_remove_multi_state(CPUHP_ZCOMP_PREPARE);
 }
