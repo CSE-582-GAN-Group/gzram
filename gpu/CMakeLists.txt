@@ -13,11 +13,10 @@ find_package(CUDA REQUIRED)
 find_package(nvCOMP REQUIRED)
 
 # Include directories
-include_directories(${CUDA_INCLUDE_DIRS} ${nvCOMP_INCLUDE_DIRS})
+include_directories(${CUDA_INCLUDE_DIRS} ${nvCOMP_INCLUDE_DIRS} ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Add executable
-# add_executable(main main.cu)
-add_executable(main naive.cu)
+add_executable(main main.cu naive.cu)
 
 # Link libraries
 target_link_libraries(main ${CUDA_LIBRARIES} nvcomp::nvcomp)
