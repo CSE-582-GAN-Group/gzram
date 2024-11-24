@@ -16,6 +16,8 @@
 #include "ublksrv.h"
 #include "ublksrv_utils.h"
 
+#include "gzram.h"
+
 #define UBLKSRV_TGT_TYPE_GZRAM  0
 
 struct gzram_queue_info {
@@ -191,7 +193,8 @@ static int gzram_init_tgt(struct ublksrv_dev *dev, int type, int argc,
 
   tgt_json.dev_size = tgt->dev_size = 250UL * 1024 * 1024 * 1024;
   tgt->tgt_ring_depth = info->queue_depth;
-  tgt->nr_fds = 0;
+  tgt->nr_fds = 1;
+  tgt->fds[1] = open_zspool("/dev/zspool0");
 
   ublksrv_json_write_dev_info(ublksrv_get_ctrl_dev(dev), jbuf, sizeof jbuf);
   ublksrv_json_write_target_base_info(jbuf, sizeof jbuf, &tgt_json);
@@ -199,14 +202,15 @@ static int gzram_init_tgt(struct ublksrv_dev *dev, int type, int argc,
   return 0;
 }
 
+static void gzram_deinit_tgt(const struct ublksrv_dev *dev)
+{
+  close(dev->tgt.fds[1]);
+}
+
 static int gzram_handle_io_async(const struct ublksrv_queue *q,
                                 const struct ublk_io_data *data)
 {
-  const struct ublksrv_io_desc *iod = data->iod;
-
-  ublksrv_complete_io(q, data->tag, iod->nr_sectors << 9);
-
-  return 0;
+  return gzram_handle_io(q, data);
 }
 
 void *null_alloc_io_buf(const struct ublksrv_queue *q, int tag, int size)
@@ -223,6 +227,7 @@ static struct ublksrv_tgt_type gzram_tgt_type = {
         .type	= UBLKSRV_TGT_TYPE_GZRAM,
         .name	=  "gzram",
         .init_tgt = gzram_init_tgt,
+        .deinit_tgt = gzram_deinit_tgt,
         .handle_io_async = gzram_handle_io_async,
         //.alloc_io_buf = null_alloc_io_buf,
         //.free_io_buf = null_free_io_buf,
