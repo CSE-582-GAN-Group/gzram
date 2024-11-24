@@ -27,6 +27,7 @@
 #include <linux/cpuhotplug.h>
 #include <linux/part_stat.h>
 #include <linux/cdev.h>
+#include <linux/falloc.h>
 
 #include "zspool_drv.h"
 
@@ -1696,7 +1697,10 @@ static int read_from_zspool(struct zram *zram, void *dst, unsigned long index)
 		//		kunmap_local(mem);
 		//		return PAGE_SIZE;
 		// TODO
-		return -EINVAL;
+		if(clear_user(dst, PAGE_SIZE) != 0) {
+			return -EFAULT;
+		}
+		return PAGE_SIZE;
 	}
 
 	size = zram_get_obj_size(zram, index);
@@ -1823,11 +1827,6 @@ device_write(struct file *filp, const char *buf, size_t len, loff_t *off)
 	src = buf;
 	index = *off;
 
-	if(len == 0) {
-		discard_from_zspool(zram, index);
-		return 0;
-	}
-
 	if(index >= zram->disksize >> PAGE_SHIFT) {
 		return -ENOMEM;
 	}
@@ -1844,6 +1843,21 @@ device_write(struct file *filp, const char *buf, size_t len, loff_t *off)
 	return len;
 }
 
+static long device_fallocate(struct file *filp, int mode, loff_t off, loff_t len)
+{
+	struct zram *zram;
+
+	zram = (struct zram*) filp->private_data;
+
+	printk("fallocate: mode=%d, offset=%llu, len=%llu\n", mode, off, len);
+
+	if(mode & (FALLOC_FL_PUNCH_HOLE | FALLOC_FL_ZERO_RANGE)) {
+		discard_from_zspool(zram, off);
+	}
+
+	return 0;
+}
+
 static int device_release(struct inode *inode, struct file *filp)
 {
   (void)inode;
@@ -1854,8 +1868,9 @@ static int device_release(struct inode *inode, struct file *filp)
 static const struct file_operations zram_ch_fops = {
 	.read = device_read,
 	.write = device_write,
+	.fallocate = device_fallocate,
 	.open = device_open,
-	.release = device_release
+	.release = device_release,
 };
 
 static DEVICE_ATTR_WO(compact);
