@@ -1,4 +1,20 @@
-#include <naive.cuh>
+#include "naive.cuh"
+
+#include <cuda_runtime.h>
+#include "nvcomp/lz4.h"
+
+// Error checking helper for CUDA calls
+#define CHECK_CUDA(call)                                                     \
+    do                                                                       \
+    {                                                                        \
+        cudaError_t err = call;                                              \
+        if (err != cudaSuccess)                                              \
+        {                                                                    \
+            fprintf(stderr, "CUDA error in %s:%d: %s\n", __FILE__, __LINE__, \
+                    cudaGetErrorString(err));                                \
+            return CUDA_ERROR;                                               \
+        }                                                                    \
+    } while (0)
 
 // Helper function to initialize empty CompressedData
 CompressedData *create_compressed_data(size_t num_pages)
@@ -90,7 +106,7 @@ void free_compressed_data(CompressedData *data)
     free(data);
 }
 
-ErrorCode compress(const char *input_data, size_t in_bytes, CompressedData **output)
+extern "C" ErrorCode compress(const char *input_data, size_t in_bytes, CompressedData **output)
 {
     cudaStream_t stream;
     CHECK_CUDA(cudaStreamCreate(&stream));
