@@ -56,6 +56,14 @@ CompressedData *create_compressed_data_from_arrays(
     size_t original_size            // Original uncompressed data size
 );
 
+// Create CompressedData that references existing arrays without copying
+CompressedData *create_compressed_data_with_references(
+    const char **page_data_array,   // Array of pointers to compressed page data
+    const size_t *page_sizes_array, // Array of compressed page sizes
+    size_t num_pages,               // Number of pages
+    size_t original_size            // Original uncompressed data size
+);
+
 // Helper function to free CompressedData
 void free_compressed_data(CompressedData *data);
 

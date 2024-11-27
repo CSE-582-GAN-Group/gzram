@@ -88,6 +88,39 @@ CompressedData *create_compressed_data_from_arrays(
     return data;
 }
 
+// Create CompressedData that references existing arrays without copying
+CompressedData *create_compressed_data_with_references(
+    const char **page_data_array,   // Array of pointers to compressed page data
+    const size_t *page_sizes_array, // Array of compressed page sizes
+    size_t num_pages,               // Number of pages
+    size_t original_size            // Original uncompressed data size
+)
+{
+    CompressedData *data = (CompressedData *)malloc(sizeof(CompressedData));
+    if (!data)
+        return NULL;
+
+    data->compressed_pages = (CompressedPage *)malloc(num_pages * sizeof(CompressedPage));
+    if (!data->compressed_pages)
+    {
+        free(data);
+        return NULL;
+    }
+
+    data->num_pages = num_pages;
+    data->original_size = original_size;
+
+    // Store references to each page's data instead of copying
+    for (size_t i = 0; i < num_pages; i++)
+    {
+        data->compressed_pages[i].size = page_sizes_array[i];
+        // Simply store the pointer to the original data
+        data->compressed_pages[i].data = (char *)page_data_array[i];
+    }
+
+    return data;
+}
+
 // Helper function to free CompressedData
 void free_compressed_data(CompressedData *data)
 {
