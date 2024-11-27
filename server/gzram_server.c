@@ -185,13 +185,13 @@ static int gzram_init_tgt(struct ublksrv_dev *dev, int type, int argc,
   struct ublksrv_tgt_base_json tgt_json = {
           .type = type,
   };
-  strcpy(tgt_json.name, "null");
+  strcpy(tgt_json.name, "gzram");
 
 
   if (type != UBLKSRV_TGT_TYPE_GZRAM)
     return -1;
 
-  tgt_json.dev_size = tgt->dev_size = 250UL * 1024 * 1024 * 1024;
+  tgt_json.dev_size = tgt->dev_size = 2UL * 1024 * 1024 * 1024;
   tgt->tgt_ring_depth = info->queue_depth;
   tgt->nr_fds = 1;
   tgt->fds[1] = open_zspool("/dev/zspool0");
@@ -237,7 +237,7 @@ int main(int argc, char *argv[])
 {
   struct ublksrv_dev_data data = {
           .dev_id = -1,
-          .max_io_buf_bytes = 512 << 12,
+          .max_io_buf_bytes = 1024*1024*1024,
           .nr_hw_queues = DEF_NR_HW_QUEUES,
           .queue_depth = DEF_QD,
           .tgt_type = "gzram",

@@ -8,29 +8,19 @@ Some TODOs:
 - More async memcpys
 - change to ZSTD
 */
+#pragma once
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <cuda_runtime.h>
 #include <assert.h>
-#include "nvcomp/lz4.h"
-
-// Error checking helper for CUDA calls
-#define CHECK_CUDA(call)                                                     \
-    do                                                                       \
-    {                                                                        \
-        cudaError_t err = call;                                              \
-        if (err != cudaSuccess)                                              \
-        {                                                                    \
-            fprintf(stderr, "CUDA error in %s:%d: %s\n", __FILE__, __LINE__, \
-                    cudaGetErrorString(err));                                \
-            return CUDA_ERROR;                                               \
-        }                                                                    \
-    } while (0)
 
 // Page size for compression
 #define PAGE_SIZE 4096
+
+#if __cplusplus
+extern "C" {
+#endif
 
 // Error handling enum
 typedef enum
@@ -84,3 +74,6 @@ ErrorCode decompress(const CompressedData *compressed_data, char **output_data, 
 // Helper function to print data
 void print_data(const char *data, size_t size, const char *label);
 
+#if __cplusplus
+}
+#endif
