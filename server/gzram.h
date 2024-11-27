@@ -1,5 +1,7 @@
 #pragma once
 
+#include <sys/ioctl.h>
+
 #include "ublksrv.h"
 #include "ublksrv_utils.h"
 
@@ -17,6 +19,13 @@
 
 #define SECTORS_PER_PAGE_SHIFT  (PAGE_SHIFT - SECTOR_SHIFT)
 #define SECTORS_PER_PAGE	(1 << SECTORS_PER_PAGE_SHIFT)
+
+struct discard_ioctl_data {
+  size_t offset;
+  size_t nr_pages;
+};
+
+#define DISCARD_IOCTL_IN _IOW('z', 0x8F, struct discard_ioctl_data)
 
 int open_zspool(char* path) {
   int fd = open(path, O_RDWR);
@@ -155,6 +164,18 @@ clean:
   free(compressed_pages);
 }
 
+static void gzram_handle_discard(int fd, unsigned int index, unsigned int nr_pages) {
+//  printf("Discard, index=%d, nr_pages=%d\n", index, nr_pages);
+  struct discard_ioctl_data data;
+  data.offset = index;
+  data.nr_pages = nr_pages;
+  int ret = ioctl(fd, DISCARD_IOCTL_IN, &data);
+  if (ret < 0) {
+    perror("ioctl");
+    return;
+  }
+}
+
 int gzram_handle_io(const struct ublksrv_queue *q, const struct ublk_io_data *data)
 {
   const struct ublksrv_io_desc *iod = data->iod;
@@ -170,10 +191,7 @@ int gzram_handle_io(const struct ublksrv_queue *q, const struct ublk_io_data *da
 
   switch (ublksrv_get_op(iod)) {
     case UBLK_IO_OP_DISCARD:
-//      printf("Discard\n");
-      for(int i = 0; i < nr_pages; ++i) {
-        pwrite(fd, NULL, DISCARD_SIZE, index + i);
-      }
+      gzram_handle_discard(fd, index, nr_pages);
       break;
     case UBLK_IO_OP_FLUSH:
 //      printf("Flush\n");
