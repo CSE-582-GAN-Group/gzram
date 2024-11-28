@@ -187,6 +187,24 @@ static int gzram_init_tgt(struct ublksrv_dev *dev, int type, int argc,
   };
   strcpy(tgt_json.name, "gzram");
 
+  printf("Args: %d\n", argc);
+
+  if(argc != 2) {
+    fprintf(stderr, "Usage: %s <dev_size>\n", argv[0]);
+    return -1;
+  }
+
+  char *endptr;
+  unsigned long long int dev_size = strtoll(argv[1], &endptr, 10);
+  if(*endptr != '\0') {
+    fprintf(stderr, "Invalid device size\n");
+    return -1;
+  }
+
+  if(dev_size < 4096) {
+    fprintf(stderr, "Device size must be at least 4KB\n");
+    return -1;
+  }
 
   if (type != UBLKSRV_TGT_TYPE_GZRAM)
     return -1;
@@ -237,7 +255,7 @@ int main(int argc, char *argv[])
 {
   struct ublksrv_dev_data data = {
           .dev_id = -1,
-          .max_io_buf_bytes = 1024*1024*1024,
+          .max_io_buf_bytes = INT_MAX,
           .nr_hw_queues = DEF_NR_HW_QUEUES,
           .queue_depth = DEF_QD,
           .tgt_type = "gzram",
@@ -265,6 +283,9 @@ int main(int argc, char *argv[])
         break;
     }
   }
+
+  data.tgt_argc = argc;
+  data.tgt_argv = argv;
 
   if (signal(SIGTERM, sig_handler) == SIG_ERR)
     error(EXIT_FAILURE, errno, "signal");
