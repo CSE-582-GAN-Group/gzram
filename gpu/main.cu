@@ -1,6 +1,62 @@
 
 #include "naive.cuh"
 #include <time.h>
+#include <lz4.h>
+#include <lz4hc.h>
+
+typedef struct {
+    char* data;
+    size_t size;
+} CPUCompressedData;
+
+ErrorCode cpu_compress(const char* input_data, size_t input_size, CPUCompressedData* output) {
+    // Calculate max compressed size needed
+    int max_dst_size = LZ4_compressBound(input_size);
+    
+    // Initialize output structure
+    output->data = (char*)malloc(max_dst_size);
+    
+    if (!output->data) {
+        return MEMORY_ERROR;
+    }
+
+    output->size = LZ4_compress_default(input_data, 
+                                      output->data, 
+                                      input_size, 
+                                      max_dst_size);
+    
+    if (output->size <= 0) {
+        free(output->data);
+        return COMPRESSION_ERROR;
+    }
+    
+    return SUCCESS;
+}
+
+ErrorCode cpu_decompress(const CPUCompressedData* input, char** output_data, size_t original_size) {
+    *output_data = (char*)malloc(original_size);
+    if (!*output_data) {
+        return MEMORY_ERROR;
+    }
+
+    int decompressed_size = LZ4_decompress_safe(input->data, *output_data, input->size, original_size);
+    
+    if (decompressed_size != original_size) {
+        free(*output_data);
+        *output_data = NULL;
+        return DECOMPRESSION_ERROR;
+    }
+    
+    return SUCCESS;
+}
+
+void free_cpu_compressed_data(CPUCompressedData* data) {
+    if (data) {
+        free(data->data);
+        data->data = NULL;
+        data->size = 0;
+    }
+}
 
 int main(int argc, char *argv[])
 {
@@ -42,93 +98,93 @@ int main(int argc, char *argv[])
 
     print_data(original_data, data_size, "Original Data");
 
-    // Compress the data
-    CompressedData *compressed = NULL;
-    ErrorCode error = compress(original_data, data_size, &compressed);
+    // Variables for timing
+    struct timespec start, end;
+    double cpu_compress_time, cpu_decompress_time, gpu_compress_time, gpu_decompress_time;
 
-    if (error != SUCCESS)
-    {
-        fprintf(stderr, "Compression failed with error code: %d\n", error);
+    // CPU Compression
+    CPUCompressedData cpu_compressed = {0};
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    ErrorCode error = cpu_compress(original_data, data_size, &cpu_compressed);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    cpu_compress_time = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+
+    if (error != SUCCESS) {
+        fprintf(stderr, "CPU Compression failed with error code: %d\n", error);
         free(original_data);
         return 1;
     }
 
-    // Calculate total compressed size
-    size_t total_compressed_size = 0;
-    for (size_t i = 0; i < compressed->num_pages; i++)
-    {
-        total_compressed_size += compressed->compressed_pages[i].size;
+    // GPU Compression
+    CompressedData *gpu_compressed = NULL;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    error = compress(original_data, data_size, &gpu_compressed);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    gpu_compress_time = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+
+    if (error != SUCCESS) {
+        fprintf(stderr, "GPU Compression failed with error code: %d\n", error);
+        free(original_data);
+        free_cpu_compressed_data(&cpu_compressed);
+        return 1;
     }
 
+    // Print compression results
     printf("\nCompression Results:\n");
     printf("Original size: %zu bytes\n", data_size);
-    printf("Compressed size: %zu bytes\n", total_compressed_size);
-    printf("Compression ratio: %.2f\n", (float)data_size / total_compressed_size);
-
-    // Example of using the new helper function
-    // First, create arrays of our compressed data
-    const char **page_data_array = (const char **)malloc(compressed->num_pages * sizeof(char *));
-    size_t *page_sizes_array = (size_t *)malloc(compressed->num_pages * sizeof(size_t));
-
-    for (size_t i = 0; i < compressed->num_pages; i++)
-    {
-        page_data_array[i] = compressed->compressed_pages[i].data;
-        page_sizes_array[i] = compressed->compressed_pages[i].size;
-    }
-
-    // Create a new CompressedData using our helper function
-    CompressedData *compressed_copy = create_compressed_data_from_arrays(
-        page_data_array,
-        page_sizes_array,
-        compressed->num_pages,
-        compressed->original_size);
-    CompressedData *compressed_ref = create_compressed_data_with_references(
-        page_data_array,
-        page_sizes_array,
-        compressed->num_pages,
-        compressed->original_size);
-
-    free(page_data_array);
-    free(page_sizes_array);
-
-    // Decompress the data
-    char *decompressed_data = NULL;
-    size_t decompressed_size = 0;
-
-    struct timespec start, end;
-    clock_gettime(CLOCK_MONOTONIC, &start);
-    // error = decompress(compressed, &decompressed_data, &decompressed_size);
-    error = decompress(compressed_copy, &decompressed_data, &decompressed_size);
-    // error = decompress(compressed_ref, &decompressed_data, &decompressed_size);
-    clock_gettime(CLOCK_MONOTONIC, &end);
+    printf("CPU Compressed size: %zu bytes (ratio: %.2f)\n", 
+           cpu_compressed.size, (float)data_size / cpu_compressed.size);
     
-    double time_taken = (end.tv_sec - start.tv_sec) + 
-                       (end.tv_nsec - start.tv_nsec) / 1e9;
-                       printf("Decompression time: %f seconds\n", time_taken);
+    size_t gpu_total_size = 0;
+    for (size_t i = 0; i < gpu_compressed->num_pages; i++) {
+        gpu_total_size += gpu_compressed->compressed_pages[i].size;
+    }
+    printf("GPU Compressed size: %zu bytes (ratio: %.2f)\n", 
+           gpu_total_size, (float)data_size / gpu_total_size);
 
+    // CPU Decompression
+    char *cpu_decompressed = NULL;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    error = cpu_decompress(&cpu_compressed, &cpu_decompressed, data_size);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    cpu_decompress_time = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
 
-    if (error != SUCCESS)
-    {
-        fprintf(stderr, "Decompression failed with error code: %d\n", error);
+    if (error != SUCCESS) {
+        fprintf(stderr, "CPU Decompression failed with error code: %d\n", error);
         free(original_data);
-        free_compressed_data(compressed);
-        free_compressed_data(compressed_copy);
+        free_cpu_compressed_data(&cpu_compressed);
+        free_compressed_data(gpu_compressed);
         return 1;
     }
 
-    print_data(decompressed_data, decompressed_size, "Decompressed Data");
+    // GPU Decompression
+    char *gpu_decompressed = NULL;
+    size_t decompressed_size = 0;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    error = decompress(gpu_compressed, &gpu_decompressed, &decompressed_size);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    gpu_decompress_time = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
 
-    // Verify the data
-    int match = (decompressed_size == data_size &&
-                 memcmp(original_data, decompressed_data, data_size) == 0);
+    // Print timing results
+    printf("\nTiming Results:\n");
+    printf("CPU Compression time: %f seconds\n", cpu_compress_time);
+    printf("GPU Compression time: %f seconds\n", gpu_compress_time);
+    printf("CPU Decompression time: %f seconds\n", cpu_decompress_time);
+    printf("GPU Decompression time: %f seconds\n", gpu_decompress_time);
 
-    printf("\nVerification: %s\n", match ? "SUCCESS" : "FAILURE");
+    // Verify both decompressed results
+    printf("\nVerification Results:\n");
+    printf("CPU Decompression: %s\n", 
+           (memcmp(original_data, cpu_decompressed, data_size) == 0) ? "SUCCESS" : "FAILURE");
+    printf("GPU Decompression: %s\n", 
+           (memcmp(original_data, gpu_decompressed, data_size) == 0) ? "SUCCESS" : "FAILURE");
 
     // Cleanup
     free(original_data);
-    free(decompressed_data);
-    free_compressed_data(compressed);
-    free_compressed_data(compressed_copy);
+    free(cpu_decompressed);
+    free(gpu_decompressed);
+    free_cpu_compressed_data(&cpu_compressed);
+    free_compressed_data(gpu_compressed);
 
     return 0;
 }

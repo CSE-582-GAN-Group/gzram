@@ -28,7 +28,9 @@ typedef enum
     SUCCESS = 0,
     CUDA_ERROR,
     NVCOMP_ERROR,
-    MEMORY_ERROR
+    MEMORY_ERROR,
+    COMPRESSION_ERROR,
+    DECOMPRESSION_ERROR,
 } ErrorCode;
 
 typedef struct
