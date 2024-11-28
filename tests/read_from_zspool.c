@@ -4,35 +4,35 @@
 #include <unistd.h>
 #include <liburing.h>
 #include <string.h>
+#include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 
 #define QUEUE_DEPTH 1
 #define BLOCK_SIZE 4096
 
-void error_exit(const char *msg) {
-  perror(msg);
-  exit(1);
-}
-
 int main(int argc, char *argv[]) {
-  if (argc < 2) {
-    fprintf(stderr, "Usage: %s <device_path>\n", argv[0]);
+  int ret = 1;
+
+  if (argc < 4) {
+    fprintf(stderr, "Usage: %s <device_path> <page> <output_path>\n", argv[0]);
     return 1;
   }
 
   const char *device_path = argv[1];
+  const char *page = argv[2];
+  const char *output_path = argv[3];
 
-  // Open the block device
   int fd = open(device_path, O_RDWR);
   if (fd < 0) {
-    error_exit("open");
+    perror("open device");
+    exit(1);
   }
 
   char *buffer;
   buffer = malloc(BLOCK_SIZE);
 
-  int amount_read = pread(fd, buffer, 4096, 57);
+  ssize_t amount_read = pread(fd, buffer, 4096, atoi(page));
 
   if(amount_read < 0) {
     perror("Read");
@@ -40,10 +40,22 @@ int main(int argc, char *argv[]) {
     exit(1);
   }
 
-  printf("Read amount: %d\n", amount_read);
+  printf("Read amount: %zd\n", amount_read);
 
+  int fd_output = open(output_path, O_CREAT | O_WRONLY);
+  if (fd_output < 0) {
+    perror("open");
+    goto clean;
+  }
+  write(fd_output, buffer, amount_read);
+
+  ret = 0;
+
+  close(fd_output);
+
+clean:
   free(buffer);
   close(fd);
 
-  return 0;
+  return ret;
 }
