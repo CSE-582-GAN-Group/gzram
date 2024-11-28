@@ -139,13 +139,22 @@ void free_compressed_data(CompressedData *data)
     free(data);
 }
 
-extern "C" ErrorCode compress(const char *input_data, size_t in_bytes, CompressedData **output)
+ErrorCode compress(const char *input_data, size_t in_bytes, CompressedData **output)
 {
+    // Create timing events
+    cudaEvent_t start, stop;
+    float milliseconds = 0;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    
+    printf("\n=== Performance Profile ===\n");
+    
+    // Phase 1: Initialization
+    cudaEventRecord(start);
+    
     cudaStream_t stream;
     CHECK_CUDA(cudaStreamCreate(&stream));
-
     const size_t num_pages = (in_bytes + PAGE_SIZE - 1) / PAGE_SIZE;
-
     // Create output structure
     CompressedData *compressed_result = create_compressed_data(num_pages);
     if (!compressed_result)
@@ -153,10 +162,17 @@ extern "C" ErrorCode compress(const char *input_data, size_t in_bytes, Compresse
         cudaStreamDestroy(stream);
         return MEMORY_ERROR;
     }
-
     compressed_result->original_size = in_bytes;
 
     // Allocate device input data
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    printf("1. Initialization: %.3f ms\n", milliseconds);
+
+    // Phase 2: Device Memory Allocation & Initial Transfer
+    cudaEventRecord(start);
+    
     char *device_input_data;
     if (cudaMalloc(&device_input_data, in_bytes) != cudaSuccess)
     {
@@ -168,7 +184,15 @@ extern "C" ErrorCode compress(const char *input_data, size_t in_bytes, Compresse
     // Copy input data to device
     CHECK_CUDA(cudaMemcpyAsync(device_input_data, input_data, in_bytes,
                                cudaMemcpyHostToDevice, stream));
+    
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    printf("2. Initial Device Allocation & Transfer: %.3f ms\n", milliseconds);
 
+    // Phase 3: Page Management Setup
+    cudaEventRecord(start);
+    
     // Find bytes per page on input data
     size_t *host_uncompressed_numbytes_per_page;
     CHECK_CUDA(cudaMallocHost(&host_uncompressed_numbytes_per_page, sizeof(size_t) * num_pages));
@@ -191,7 +215,15 @@ extern "C" ErrorCode compress(const char *input_data, size_t in_bytes, Compresse
     {
         host_uncompressed_data_per_page[i] = device_input_data + PAGE_SIZE * i;
     }
+    
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    printf("3. Page Management Setup: %.3f ms\n", milliseconds);
 
+    // Phase 4: Device Memory Setup for Pages
+    cudaEventRecord(start);
+    
     // Copy pointers of sizes and data to device
     size_t *device_uncompressed_numbytes_per_page;
     void **device_uncompressed_data_per_page;
@@ -201,7 +233,15 @@ extern "C" ErrorCode compress(const char *input_data, size_t in_bytes, Compresse
                                sizeof(size_t) * num_pages, cudaMemcpyHostToDevice, stream));
     CHECK_CUDA(cudaMemcpyAsync(device_uncompressed_data_per_page, host_uncompressed_data_per_page,
                                sizeof(void *) * num_pages, cudaMemcpyHostToDevice, stream));
+    
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    printf("4. Device Page Setup: %.3f ms\n", milliseconds);
 
+    // Phase 5: Compression Buffer Setup
+    cudaEventRecord(start);
+    
     // Calculate temp data buffer size required for compression and allocate it
     size_t temp_bytes;
     nvcompBatchedLZ4CompressGetTempSize(num_pages, PAGE_SIZE,
@@ -227,6 +267,14 @@ extern "C" ErrorCode compress(const char *input_data, size_t in_bytes, Compresse
     }
     CHECK_CUDA(cudaMemcpyAsync(device_compressed_data_per_page, host_compressed_data_per_page,
                                sizeof(void *) * num_pages, cudaMemcpyHostToDevice, stream));
+    
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    printf("5. Compression Buffer Setup: %.3f ms\n", milliseconds);
+
+    // Phase 6: Main Compression
+    cudaEventRecord(start);
 
     // Compress the data
     nvcompStatus_t comp_res = nvcompBatchedLZ4CompressAsync(
@@ -260,7 +308,15 @@ extern "C" ErrorCode compress(const char *input_data, size_t in_bytes, Compresse
         cudaStreamDestroy(stream);
         return NVCOMP_ERROR;
     }
+    
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    printf("6. Main Compression: %.3f ms\n", milliseconds);
 
+    // Phase 7: Result Collection
+    cudaEventRecord(start);
+    
     // Get the compressed sizes and copy compressed data
     size_t *compressed_sizes = (size_t *)malloc(num_pages * sizeof(size_t));
     if (!compressed_sizes)
@@ -292,7 +348,15 @@ extern "C" ErrorCode compress(const char *input_data, size_t in_bytes, Compresse
     }
 
     free(compressed_sizes);
+    
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    printf("7. Result Collection: %.3f ms\n", milliseconds);
 
+    // Phase 8: Cleanup
+    cudaEventRecord(start);
+    
     // Cleanup CUDA resources
     cudaFree(device_input_data);
     cudaFreeHost(host_uncompressed_numbytes_per_page);
@@ -307,6 +371,16 @@ extern "C" ErrorCode compress(const char *input_data, size_t in_bytes, Compresse
     cudaFreeHost(host_compressed_data_per_page);
     cudaFree(device_compressed_data_per_page);
     cudaFree(device_compressed_numbytes_per_page);
+    
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    printf("8. Cleanup: %.3f ms\n", milliseconds);
+
+    // Cleanup timing events
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+
     cudaStreamDestroy(stream);
 
     *output = compressed_result;
