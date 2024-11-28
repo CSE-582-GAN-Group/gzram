@@ -164,7 +164,7 @@ clean:
   free(compressed_pages);
 }
 
-static void gzram_handle_discard(int fd, unsigned int index, unsigned int nr_pages) {
+static int gzram_handle_discard(int fd, unsigned int index, unsigned int nr_pages) {
 //  printf("Discard, index=%d, nr_pages=%d\n", index, nr_pages);
   struct discard_ioctl_data data;
   data.offset = index;
@@ -172,8 +172,9 @@ static void gzram_handle_discard(int fd, unsigned int index, unsigned int nr_pag
   int ret = ioctl(fd, DISCARD_IOCTL_IN, &data);
   if (ret < 0) {
     perror("ioctl");
-    return;
+    return ret;
   }
+  return 0;
 }
 
 int gzram_handle_io(const struct ublksrv_queue *q, const struct ublk_io_data *data)
@@ -191,8 +192,9 @@ int gzram_handle_io(const struct ublksrv_queue *q, const struct ublk_io_data *da
 
   switch (ublksrv_get_op(iod)) {
     case UBLK_IO_OP_DISCARD:
-      gzram_handle_discard(fd, index, nr_pages);
-      break;
+      int ret = gzram_handle_discard(fd, index, nr_pages);
+      ublksrv_complete_io(q, data->tag, ret);
+      return 0;
     case UBLK_IO_OP_FLUSH:
 //      printf("Flush\n");
       break;
