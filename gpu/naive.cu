@@ -239,17 +239,17 @@ ErrorCode compress(const char *input_data, size_t in_bytes, CompressedData **out
     cudaEventElapsedTime(&milliseconds, start, stop);
     printf("4. Device Page Setup: %.3f ms\n", milliseconds);
 
-    // Phase 5: Compression Buffer Setup
+
+    // Phase 5: Compression Buffer Setup - OPTIMIZED
     cudaEventRecord(start);
     
-    // Calculate temp data buffer size required for compression and allocate it
     size_t temp_bytes;
     nvcompBatchedLZ4CompressGetTempSize(num_pages, PAGE_SIZE,
-                                        nvcompBatchedLZ4DefaultOpts, &temp_bytes);
+                                       nvcompBatchedLZ4DefaultOpts, &temp_bytes);
     void *device_temp_ptr;
     CHECK_CUDA(cudaMalloc(&device_temp_ptr, temp_bytes));
 
-    // Allocate space for compressed data
+    // Allocate a single large buffer instead of many small ones
     void **host_compressed_data_per_page;
     void **device_compressed_data_per_page;
     size_t *device_compressed_numbytes_per_page;
@@ -259,14 +259,19 @@ ErrorCode compress(const char *input_data, size_t in_bytes, CompressedData **out
 
     size_t max_out_bytes;
     nvcompBatchedLZ4CompressGetMaxOutputChunkSize(PAGE_SIZE,
-                                                  nvcompBatchedLZ4DefaultOpts,
-                                                  &max_out_bytes);
-    for (size_t i = 0; i < num_pages; ++i)
-    {
-        CHECK_CUDA(cudaMalloc(&host_compressed_data_per_page[i], max_out_bytes));
+                                                 nvcompBatchedLZ4DefaultOpts,
+                                                 &max_out_bytes);
+    
+    // Allocate one large buffer for all pages
+    void* compressed_data_buffer;
+    CHECK_CUDA(cudaMalloc(&compressed_data_buffer, max_out_bytes * num_pages));
+    
+    // Set up pointers into the buffer
+    for (size_t i = 0; i < num_pages; ++i) {
+        host_compressed_data_per_page[i] = (char*)compressed_data_buffer + (i * max_out_bytes);
     }
     CHECK_CUDA(cudaMemcpyAsync(device_compressed_data_per_page, host_compressed_data_per_page,
-                               sizeof(void *) * num_pages, cudaMemcpyHostToDevice, stream));
+                              sizeof(void *) * num_pages, cudaMemcpyHostToDevice, stream));
     
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
@@ -314,60 +319,64 @@ ErrorCode compress(const char *input_data, size_t in_bytes, CompressedData **out
     cudaEventElapsedTime(&milliseconds, start, stop);
     printf("6. Main Compression: %.3f ms\n", milliseconds);
 
-    // Phase 7: Result Collection
+    // Phase 7: Result Collection - OPTIMIZED
     cudaEventRecord(start);
     
-    // Get the compressed sizes and copy compressed data
+    // Allocate a single host buffer for all compressed data
+    char* host_compressed_buffer;
+    CHECK_CUDA(cudaMallocHost(&host_compressed_buffer, max_out_bytes * num_pages));
+    
+    // Get all compressed sizes in one transfer
     size_t *compressed_sizes = (size_t *)malloc(num_pages * sizeof(size_t));
-    if (!compressed_sizes)
-    {
-        // TODO: cleanup resources
+    if (!compressed_sizes) {
         return MEMORY_ERROR;
     }
 
-    CHECK_CUDA(cudaMemcpy(compressed_sizes, device_compressed_numbytes_per_page,
-                          sizeof(size_t) * num_pages, cudaMemcpyDeviceToHost));
-
-    // Copy each compressed chunk
-    for (size_t i = 0; i < num_pages; i++)
-    {
+    CHECK_CUDA(cudaMemcpyAsync(compressed_sizes, device_compressed_numbytes_per_page,
+                              sizeof(size_t) * num_pages, cudaMemcpyDeviceToHost, stream));
+    
+    // Copy all compressed data in one large transfer
+    CHECK_CUDA(cudaMemcpyAsync(host_compressed_buffer, compressed_data_buffer,
+                              max_out_bytes * num_pages, cudaMemcpyDeviceToHost, stream));
+    
+    // Wait for transfers to complete
+    CHECK_CUDA(cudaStreamSynchronize(stream));
+    
+    // Set up the output structure (now using CPU memory)
+    for (size_t i = 0; i < num_pages; i++) {
         compressed_result->compressed_pages[i].size = compressed_sizes[i];
         compressed_result->compressed_pages[i].data = (char *)malloc(compressed_sizes[i]);
-        if (!compressed_result->compressed_pages[i].data)
-        {
+        if (!compressed_result->compressed_pages[i].data) {
             free(compressed_sizes);
-            free_compressed_data(compressed_result);
-            // TODO: cleanup CUDA resources
+            cudaFreeHost(host_compressed_buffer);
             return MEMORY_ERROR;
         }
-
-        CHECK_CUDA(cudaMemcpy(compressed_result->compressed_pages[i].data,
-                              host_compressed_data_per_page[i],
-                              compressed_sizes[i],
-                              cudaMemcpyDeviceToHost));
+        
+        // Copy from pinned buffer to final destination (CPU memory copy, no CUDA involved) TODO: discuss with nolan, we can copy directly to the right region
+        memcpy(compressed_result->compressed_pages[i].data,
+               host_compressed_buffer + (i * max_out_bytes),
+               compressed_sizes[i]);
     }
 
     free(compressed_sizes);
+    cudaFreeHost(host_compressed_buffer);
     
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&milliseconds, start, stop);
     printf("7. Result Collection: %.3f ms\n", milliseconds);
 
-    // Phase 8: Cleanup
+    // Phase 8: Cleanup - OPTIMIZED
     cudaEventRecord(start);
     
-    // Cleanup CUDA resources
+    // Single large free instead of many small ones
+    cudaFree(compressed_data_buffer);
     cudaFree(device_input_data);
     cudaFreeHost(host_uncompressed_numbytes_per_page);
     cudaFreeHost(host_uncompressed_data_per_page);
     cudaFree(device_uncompressed_numbytes_per_page);
     cudaFree(device_uncompressed_data_per_page);
     cudaFree(device_temp_ptr);
-    for (size_t i = 0; i < num_pages; i++)
-    {
-        cudaFree(host_compressed_data_per_page[i]);
-    }
     cudaFreeHost(host_compressed_data_per_page);
     cudaFree(device_compressed_data_per_page);
     cudaFree(device_compressed_numbytes_per_page);
