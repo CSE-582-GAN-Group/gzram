@@ -35,6 +35,13 @@ static DEFINE_IDR(zram_index_idr);
 /* idr index must be protected */
 static DEFINE_MUTEX(zram_index_mutex);
 
+struct discard_ioctl_data {
+	size_t offset;
+	size_t nr_pages;
+};
+
+#define DISCARD_IOCTL_IN _IOW('z', 0x8F, struct discard_ioctl_data)
+
 //static int zram_major;
 //static const char *default_compressor = CONFIG_ZRAM_DEF_COMP;
 
@@ -823,7 +830,7 @@ static struct dentry *zram_debugfs_root;
 
 static void zram_debugfs_create(void)
 {
-	zram_debugfs_root = debugfs_create_dir("zram", NULL);
+	zram_debugfs_root = debugfs_create_dir("zspool", NULL);
 }
 
 static void zram_debugfs_destroy(void)
@@ -1700,7 +1707,7 @@ static int read_from_zspool(struct zram *zram, void *dst, unsigned long index)
 		if(clear_user(dst, PAGE_SIZE) != 0) {
 			return -EFAULT;
 		}
-		return PAGE_SIZE;
+		return 0;
 	}
 
 	size = zram_get_obj_size(zram, index);
@@ -1843,21 +1850,6 @@ device_write(struct file *filp, const char *buf, size_t len, loff_t *off)
 	return len;
 }
 
-static long device_fallocate(struct file *filp, int mode, loff_t off, loff_t len)
-{
-	struct zram *zram;
-
-	zram = (struct zram*) filp->private_data;
-
-	printk("fallocate: mode=%d, offset=%llu, len=%llu\n", mode, off, len);
-
-	if(mode & (FALLOC_FL_PUNCH_HOLE | FALLOC_FL_ZERO_RANGE)) {
-		discard_from_zspool(zram, off);
-	}
-
-	return 0;
-}
-
 static int device_release(struct inode *inode, struct file *filp)
 {
   (void)inode;
@@ -1865,10 +1857,43 @@ static int device_release(struct inode *inode, struct file *filp)
 	return 0;
 }
 
+static long device_ioctl (struct file *filp, unsigned int cmd, unsigned long arg)
+{
+	struct zram *zram;
+	struct discard_ioctl_data data;
+
+	zram = (struct zram*) filp->private_data;
+
+	switch(cmd) {
+	case DISCARD_IOCTL_IN:
+		if( copy_from_user(&data, (struct discard_ioctl_data *) arg,
+				   sizeof(struct discard_ioctl_data)) )
+			return -EFAULT;
+
+//		printk("ioctl discard. offset=%lu, nr_pages=%lu",
+//		       data.offset, data.nr_pages);
+
+		if(data.offset+data.nr_pages-1 >= zram->disksize >> PAGE_SHIFT) {
+			return -ENOMEM;
+		}
+
+		for(size_t i = 0; i < data.nr_pages; ++i) {
+			discard_from_zspool(zram, data.offset + i);
+		}
+
+		break;
+	default:
+		return -ENOTTY;
+	}
+
+	return 0;
+}
+
 static const struct file_operations zram_ch_fops = {
+	.owner = THIS_MODULE,
 	.read = device_read,
 	.write = device_write,
-	.fallocate = device_fallocate,
+	.unlocked_ioctl = device_ioctl,
 	.open = device_open,
 	.release = device_release,
 };
