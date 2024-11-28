@@ -1,24 +1,43 @@
 
 #include "naive.cuh"
+#include <time.h>
 
-int main()
+int main(int argc, char *argv[])
 {
-    // Generate sample data with patterns (more compressible)
-    const size_t data_size = 1000000;
-    char *original_data = (char *)malloc(data_size);
-    if (!original_data)
-    {
-        fprintf(stderr, "Failed to allocate memory for original data\n");
+    // Check if filename was provided
+    if (argc != 2) {
+        fprintf(stderr, "Usage: %s <input_file>\n", argv[0]);
         return 1;
     }
 
-    // Create repeating pattern
-    const char pattern[] = "hi, this is a test string that will be repeated many times";
-    const size_t pattern_length = strlen(pattern);
+    // Open the file
+    FILE *file = fopen(argv[1], "rb");
+    if (!file) {
+        fprintf(stderr, "Failed to open file: %s\n", argv[1]);
+        return 1;
+    }
 
-    for (size_t i = 0; i < data_size; i++)
-    {
-        original_data[i] = pattern[i % pattern_length];
+    // Get file size
+    fseek(file, 0, SEEK_END);
+    size_t data_size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+
+    // Allocate memory for the data
+    char *original_data = (char *)malloc(data_size);
+    if (!original_data) {
+        fprintf(stderr, "Failed to allocate memory for original data\n");
+        fclose(file);
+        return 1;
+    }
+
+    // Read the file
+    size_t bytes_read = fread(original_data, 1, data_size, file);
+    fclose(file);
+
+    if (bytes_read != data_size) {
+        fprintf(stderr, "Failed to read entire file\n");
+        free(original_data);
+        return 1;
     }
 
     print_data(original_data, data_size, "Original Data");
@@ -63,6 +82,11 @@ int main()
         page_sizes_array,
         compressed->num_pages,
         compressed->original_size);
+    CompressedData *compressed_ref = create_compressed_data_with_references(
+        page_data_array,
+        page_sizes_array,
+        compressed->num_pages,
+        compressed->original_size);
 
     free(page_data_array);
     free(page_sizes_array);
@@ -70,8 +94,18 @@ int main()
     // Decompress the data
     char *decompressed_data = NULL;
     size_t decompressed_size = 0;
-    error = decompress(compressed, &decompressed_data, &decompressed_size);
-    // error = decompress(compressed_copy, &decompressed_data, &decompressed_size);
+
+    struct timespec start, end;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    // error = decompress(compressed, &decompressed_data, &decompressed_size);
+    error = decompress(compressed_copy, &decompressed_data, &decompressed_size);
+    // error = decompress(compressed_ref, &decompressed_data, &decompressed_size);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    
+    double time_taken = (end.tv_sec - start.tv_sec) + 
+                       (end.tv_nsec - start.tv_nsec) / 1e9;
+                       printf("Decompression time: %f seconds\n", time_taken);
+
 
     if (error != SUCCESS)
     {
