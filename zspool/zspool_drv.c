@@ -1704,18 +1704,13 @@ static int read_from_zspool(struct zram *zram, void *dst, unsigned long index)
 		//		kunmap_local(mem);
 		//		return PAGE_SIZE;
 		// TODO
-		if(clear_user(dst, PAGE_SIZE) != 0) {
-			return -EFAULT;
-		}
 		return 0;
 	}
 
 	size = zram_get_obj_size(zram, index);
 
 	src = zs_map_object(zram->mem_pool, handle, ZS_MM_RO);
-	if(copy_to_user(dst, src, size) != 0) {
-		return -EFAULT;
-	}
+	memcpy(dst, src, size);
 	zs_unmap_object(zram->mem_pool, handle);
 
 	return size;
@@ -1793,7 +1788,7 @@ static void discard_from_zspool(struct zram *zram, unsigned int index)
 	atomic64_inc(&zram->stats.notify_free);
 }
 
-static ssize_t device_read(struct file *filp, char *buf, size_t len, loff_t *off)
+static ssize_t device_read(struct file *filp, char __user *buf, size_t len, loff_t *off)
 {
 	struct zram *zram;
 	void *dst;
@@ -1801,10 +1796,14 @@ static ssize_t device_read(struct file *filp, char *buf, size_t len, loff_t *off
 	int ret;
 
 	zram = (struct zram*) filp->private_data;
-	dst = buf;
+	dst = kmalloc(4096, GFP_KERNEL);
+	if(dst == NULL) {
+		return -ENOMEM;
+	}
 	index = *off;
 
 	if(index >= zram->disksize >> PAGE_SHIFT) {
+		kfree(dst);
 		return -ENOMEM;
 	}
 
@@ -1812,6 +1811,7 @@ static ssize_t device_read(struct file *filp, char *buf, size_t len, loff_t *off
 	ret = read_from_zspool(zram, dst, index);
 	if(ret < 0) {
 		zram_slot_unlock(zram, index);
+		kfree(dst);
 		return ret;
 	}
 	zram_slot_unlock(zram, index);
@@ -1819,6 +1819,15 @@ static ssize_t device_read(struct file *filp, char *buf, size_t len, loff_t *off
 	zram_slot_lock(zram, index);
 	zram_accessed(zram, index);
 	zram_slot_unlock(zram, index);
+
+	if(ret > 0) {
+		if(copy_to_user(buf, dst, ret) != 0) {
+			kfree(dst);
+			return -EFAULT;
+		}
+	}
+
+	kfree(dst);
 
 	return ret;
 }
