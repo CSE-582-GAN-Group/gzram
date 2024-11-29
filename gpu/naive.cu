@@ -396,172 +396,242 @@ ErrorCode compress(const char *input_data, size_t in_bytes, CompressedData **out
     return SUCCESS;
 }
 
-ErrorCode decompress(const CompressedData *compressed_data, char **output_data, size_t *output_size)
-{
+ErrorCode decompress(const CompressedData *compressed_data, char **output_data, size_t *output_size) {
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    float milliseconds;
+
+    printf("\n=== Starting Unified Memory Version ===\n");
+    cudaEventRecord(start);
+
     cudaStream_t stream;
     CHECK_CUDA(cudaStreamCreate(&stream));
+
+    // Get current device for memory advice
+    int current_device;
+    cudaGetDevice(&current_device);
 
     size_t num_pages = compressed_data->num_pages;
     *output_size = compressed_data->original_size;
 
-    // Allocate and copy compressed data to device
-    void **host_compressed_data_per_page;
-    CHECK_CUDA(cudaMallocHost(&host_compressed_data_per_page, sizeof(void *) * num_pages));
-
-    // Need an array of sizes for the API
-    size_t *device_compressed_numbytes_per_page;
-    CHECK_CUDA(cudaMalloc(&device_compressed_numbytes_per_page, sizeof(size_t) * num_pages));
-
-    // Create temporary array of sizes and copy to device
+    // Calculate total compressed size
+    size_t total_compressed_size = 0;
     size_t *compressed_sizes = (size_t *)malloc(num_pages * sizeof(size_t));
-    if (!compressed_sizes)
-    {
-        cudaFreeHost(host_compressed_data_per_page);
-        cudaFree(device_compressed_numbytes_per_page);
-        cudaStreamDestroy(stream);
+    if (!compressed_sizes) return MEMORY_ERROR;
+
+    for (size_t i = 0; i < num_pages; i++) {
+        compressed_sizes[i] = compressed_data->compressed_pages[i].size;
+        total_compressed_size += compressed_sizes[i];
+    }
+
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    printf("Initial setup: %.3f ms\n", milliseconds);
+    cudaEventRecord(start);
+
+    // Allocate unified memory for output early
+    CHECK_CUDA(cudaMallocManaged(output_data, compressed_data->original_size));
+
+    // Add memory advice after allocation
+    CHECK_CUDA(cudaMemAdvise(*output_data, 
+                            compressed_data->original_size,
+                            cudaMemAdviseSetPreferredLocation, 
+                            current_device));
+
+    // Allocate device buffers
+    char *device_compressed_data;
+    CHECK_CUDA(cudaMalloc(&device_compressed_data, total_compressed_size));
+    void **device_compressed_ptrs;
+    CHECK_CUDA(cudaMalloc(&device_compressed_ptrs, num_pages * sizeof(void*)));
+
+    void **host_compressed_ptrs = (void**)malloc(num_pages * sizeof(void*));
+    if (!host_compressed_ptrs) {
+        cudaFree(device_compressed_data);
+        free(compressed_sizes);
         return MEMORY_ERROR;
     }
 
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    printf("Initial allocations: %.3f ms\n", milliseconds);
+    cudaEventRecord(start);
+
     // Copy compressed data to GPU
-    for (size_t i = 0; i < num_pages; i++)
-    {
-        compressed_sizes[i] = compressed_data->compressed_pages[i].size;
-        CHECK_CUDA(cudaMalloc(&host_compressed_data_per_page[i], compressed_sizes[i]));
-        CHECK_CUDA(cudaMemcpy(host_compressed_data_per_page[i],
-                              compressed_data->compressed_pages[i].data,
-                              compressed_sizes[i],
-                              cudaMemcpyHostToDevice));
+    char* current_pos = device_compressed_data;
+    for (size_t i = 0; i < num_pages; i++) {
+        host_compressed_ptrs[i] = current_pos;
+        CHECK_CUDA(cudaMemcpyAsync(current_pos,
+                                compressed_data->compressed_pages[i].data,
+                                compressed_sizes[i],
+                                cudaMemcpyHostToDevice,
+                                stream));
+        current_pos += compressed_sizes[i];
     }
 
-    CHECK_CUDA(cudaMemcpy(device_compressed_numbytes_per_page, compressed_sizes,
-                          sizeof(size_t) * num_pages, cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpyAsync(device_compressed_ptrs, 
+                            host_compressed_ptrs,
+                            num_pages * sizeof(void*),
+                            cudaMemcpyHostToDevice,
+                            stream));
 
-    free(compressed_sizes);
+    size_t *device_compressed_sizes;
+    CHECK_CUDA(cudaMalloc(&device_compressed_sizes, num_pages * sizeof(size_t)));
+    CHECK_CUDA(cudaMemcpyAsync(device_compressed_sizes,
+                            compressed_sizes,
+                            num_pages * sizeof(size_t),
+                            cudaMemcpyHostToDevice,
+                            stream));
+
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    printf("Data transfer to GPU: %.3f ms\n", milliseconds);
+    cudaEventRecord(start);
 
     // Get decompressed sizes
-    size_t *device_uncompressed_numbytes_per_page;
-    CHECK_CUDA(cudaMalloc(&device_uncompressed_numbytes_per_page, sizeof(size_t) * num_pages));
+    size_t *device_uncompressed_sizes;
+    CHECK_CUDA(cudaMalloc(&device_uncompressed_sizes, num_pages * sizeof(size_t)));
 
     nvcompStatus_t status = nvcompBatchedLZ4GetDecompressSizeAsync(
-        (const void **)host_compressed_data_per_page,
-        device_compressed_numbytes_per_page,
-        device_uncompressed_numbytes_per_page,
+        (const void **)device_compressed_ptrs,
+        device_compressed_sizes,
+        device_uncompressed_sizes,
         num_pages,
         stream);
 
-    if (status != nvcompSuccess)
-    {
-        for (size_t i = 0; i < num_pages; i++)
-        {
-            cudaFree(host_compressed_data_per_page[i]);
-        }
-        cudaFreeHost(host_compressed_data_per_page);
-        cudaFree(device_compressed_numbytes_per_page);
-        cudaFree(device_uncompressed_numbytes_per_page);
-        cudaStreamDestroy(stream);
+    if (status != nvcompSuccess) {
+        cudaFree(device_compressed_data);
+        cudaFree(device_compressed_ptrs);
+        cudaFree(device_compressed_sizes);
+        cudaFree(device_uncompressed_sizes);
+        free(compressed_sizes);
+        free(host_compressed_ptrs);
         return NVCOMP_ERROR;
     }
 
-    // Get temp buffer size and allocate it
-    size_t decomp_temp_bytes;
-    nvcompBatchedLZ4DecompressGetTempSize(num_pages, PAGE_SIZE, &decomp_temp_bytes);
-    void *device_temp_ptr;
-    CHECK_CUDA(cudaMalloc(&device_temp_ptr, decomp_temp_bytes));
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    printf("Get decompressed sizes: %.3f ms\n", milliseconds);
+    cudaEventRecord(start);
+
+    // Setup output pointers using unified memory
+    void **device_uncompressed_ptrs;
+    CHECK_CUDA(cudaMalloc(&device_uncompressed_ptrs, num_pages * sizeof(void*)));
+
+    void **host_uncompressed_ptrs = (void**)malloc(num_pages * sizeof(void*));
+    if (!host_uncompressed_ptrs) {
+        cudaFree(device_compressed_data);
+        cudaFree(device_compressed_ptrs);
+        cudaFree(device_compressed_sizes);
+        cudaFree(device_uncompressed_sizes);
+        cudaFree(device_uncompressed_ptrs);
+        free(compressed_sizes);
+        free(host_compressed_ptrs);
+        return MEMORY_ERROR;
+    }
+
+    for (size_t i = 0; i < num_pages; i++) {
+        host_uncompressed_ptrs[i] = *output_data + (i * PAGE_SIZE);
+    }
+
+    CHECK_CUDA(cudaMemcpyAsync(device_uncompressed_ptrs,
+                            host_uncompressed_ptrs,
+                            num_pages * sizeof(void*),
+                            cudaMemcpyHostToDevice,
+                            stream));
+
+    size_t temp_bytes;
+    nvcompBatchedLZ4DecompressGetTempSize(num_pages, PAGE_SIZE, &temp_bytes);
+    void *device_temp;
+    CHECK_CUDA(cudaMalloc(&device_temp, temp_bytes));
 
     nvcompStatus_t *device_statuses;
-    CHECK_CUDA(cudaMalloc(&device_statuses, sizeof(nvcompStatus_t) * num_pages));
+    CHECK_CUDA(cudaMalloc(&device_statuses, num_pages * sizeof(nvcompStatus_t)));
 
-    size_t *device_actual_uncompressed_numbytes_per_page;
-    CHECK_CUDA(cudaMalloc(&device_actual_uncompressed_numbytes_per_page, sizeof(size_t) * num_pages));
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    printf("Output setup: %.3f ms\n", milliseconds);
+    cudaEventRecord(start);
 
-    // Allocate output buffer
-    char *device_output_data;
-    CHECK_CUDA(cudaMalloc(&device_output_data, compressed_data->original_size));
-
-    // Setup output pointers
-    void **device_uncompressed_data_per_page;
-    void **host_uncompressed_data_per_page;
-    CHECK_CUDA(cudaMalloc(&device_uncompressed_data_per_page, sizeof(void *) * num_pages));
-    CHECK_CUDA(cudaMallocHost(&host_uncompressed_data_per_page, sizeof(void *) * num_pages));
-    for (size_t i = 0; i < num_pages; i++)
-    {
-        host_uncompressed_data_per_page[i] = device_output_data + PAGE_SIZE * i;
-    }
-    CHECK_CUDA(cudaMemcpy(device_uncompressed_data_per_page, host_uncompressed_data_per_page,
-                          sizeof(void *) * num_pages, cudaMemcpyHostToDevice));
-
-    // Decompress the data
     status = nvcompBatchedLZ4DecompressAsync(
-        (const void **)host_compressed_data_per_page,
-        device_compressed_numbytes_per_page,
-        device_uncompressed_numbytes_per_page,
-        device_actual_uncompressed_numbytes_per_page,
+        (const void **)device_compressed_ptrs,
+        device_compressed_sizes,
+        device_uncompressed_sizes,
+        device_uncompressed_sizes,
         num_pages,
-        device_temp_ptr,
-        decomp_temp_bytes,
-        device_uncompressed_data_per_page,
+        device_temp,
+        temp_bytes,
+        device_uncompressed_ptrs,
         device_statuses,
         stream);
 
-    if (status != nvcompSuccess)
-    {
-        for (size_t i = 0; i < num_pages; i++)
-        {
-            cudaFree(host_compressed_data_per_page[i]);
-        }
-        cudaFreeHost(host_compressed_data_per_page);
-        cudaFree(device_compressed_numbytes_per_page);
-        cudaFree(device_uncompressed_numbytes_per_page);
-        cudaFree(device_temp_ptr);
+    if (status != nvcompSuccess) {
+        cudaFree(device_compressed_data);
+        cudaFree(device_compressed_ptrs);
+        cudaFree(device_compressed_sizes);
+        cudaFree(device_uncompressed_sizes);
+        cudaFree(device_uncompressed_ptrs);
+        cudaFree(device_temp);
         cudaFree(device_statuses);
-        cudaFree(device_actual_uncompressed_numbytes_per_page);
-        cudaFree(device_uncompressed_data_per_page);
-        cudaFree(device_output_data);
-        cudaFreeHost(host_uncompressed_data_per_page);
-        cudaStreamDestroy(stream);
+        free(compressed_sizes);
+        free(host_compressed_ptrs);
+        free(host_uncompressed_ptrs);
         return NVCOMP_ERROR;
     }
 
-    // Allocate and copy result to host
-    *output_data = (char *)malloc(compressed_data->original_size);
-    if (!*output_data)
-    {
-        for (size_t i = 0; i < num_pages; i++)
-        {
-            cudaFree(host_compressed_data_per_page[i]);
-        }
-        cudaFreeHost(host_compressed_data_per_page);
-        cudaFree(device_compressed_numbytes_per_page);
-        cudaFree(device_uncompressed_numbytes_per_page);
-        cudaFree(device_temp_ptr);
-        cudaFree(device_statuses);
-        cudaFree(device_actual_uncompressed_numbytes_per_page);
-        cudaFree(device_uncompressed_data_per_page);
-        cudaFree(device_output_data);
-        cudaFreeHost(host_uncompressed_data_per_page);
-        cudaStreamDestroy(stream);
-        return MEMORY_ERROR;
-    }
+    cudaStreamSynchronize(stream);
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    printf("Decompression: %.3f ms\n", milliseconds);
+    cudaEventRecord(start);
 
-    CHECK_CUDA(cudaMemcpy(*output_data, device_output_data,
-                          compressed_data->original_size, cudaMemcpyDeviceToHost));
+    // Change preferred location to CPU before prefetching
+    CHECK_CUDA(cudaMemAdvise(*output_data,
+                            compressed_data->original_size,
+                            cudaMemAdviseSetPreferredLocation,
+                            cudaCpuDeviceId));
 
-    // Cleanup all allocated resources
-    for (size_t i = 0; i < num_pages; i++)
-    {
-        cudaFree(host_compressed_data_per_page[i]);
-    }
-    cudaFreeHost(host_compressed_data_per_page);
-    cudaFree(device_compressed_numbytes_per_page);
-    cudaFree(device_uncompressed_numbytes_per_page);
-    cudaFree(device_temp_ptr);
+    // Ensure data is available on host
+    CHECK_CUDA(cudaMemPrefetchAsync(*output_data, 
+                                compressed_data->original_size,
+                                cudaCpuDeviceId,
+                                stream));
+
+    cudaStreamSynchronize(stream);
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    printf("Memory prefetch to host: %.3f ms\n", milliseconds);
+    cudaEventRecord(start);
+
+    // Cleanup
+    cudaFree(device_compressed_data);
+    cudaFree(device_compressed_ptrs);
+    cudaFree(device_compressed_sizes);
+    cudaFree(device_uncompressed_sizes);
+    cudaFree(device_uncompressed_ptrs);
+    cudaFree(device_temp);
     cudaFree(device_statuses);
-    cudaFree(device_actual_uncompressed_numbytes_per_page);
-    cudaFree(device_uncompressed_data_per_page);
-    cudaFree(device_output_data);
-    cudaFreeHost(host_uncompressed_data_per_page);
-
+    free(compressed_sizes);
+    free(host_compressed_ptrs);
+    free(host_uncompressed_ptrs);
     cudaStreamDestroy(stream);
+
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    printf("Cleanup: %.3f ms\n", milliseconds);
+    printf("=== Profiling Complete ===\n\n");
+
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+
     return SUCCESS;
 }
 
