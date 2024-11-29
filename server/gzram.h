@@ -54,6 +54,8 @@ static int gzram_handle_write_test(const struct ublksrv_io_desc *iod, int fd, un
     }
   }
 
+  fsync(fd);
+
   return iod_num_bytes(iod);
 }
 
@@ -78,11 +80,13 @@ static int gzram_handle_write_cpu(const struct ublksrv_io_desc *iod, int fd, uns
   }
   free(buf);
 
+  fsync(fd);
+
   return iod_num_bytes(iod);
 }
 
 static int gzram_handle_write(const struct ublksrv_io_desc *iod, int fd, unsigned int index, unsigned int nr_pages) {
-//  printf("Write, index=%d, nr_pages=%d\n", index, nr_pages);
+  printf("Write, index=%d, nr_pages=%d\n", index, nr_pages);
   CompressedData *compressed = NULL;
   ErrorCode error = compress((void*)iod->addr, iod->nr_sectors << SECTOR_SHIFT, &compressed);
   if (error != SUCCESS)
@@ -111,7 +115,9 @@ static int gzram_handle_write(const struct ublksrv_io_desc *iod, int fd, unsigne
 //  printf("Compression ratio: %.2f\n", (float)compressed->original_size / compressed_size);
   free_compressed_data(compressed);
 
-//  printf("\n");
+//  printf("\n");:
+
+  fsync(fd);
 
   return iod_num_bytes(iod);
 }
