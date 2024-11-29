@@ -82,7 +82,7 @@ static int gzram_handle_write_cpu(const struct ublksrv_io_desc *iod, int fd, uns
 }
 
 static int gzram_handle_write(const struct ublksrv_io_desc *iod, int fd, unsigned int index, unsigned int nr_pages) {
-  printf("Write, index=%d, nr_pages=%d\n", index, nr_pages);
+//  printf("Write, index=%d, nr_pages=%d\n", index, nr_pages);
   CompressedData *compressed = NULL;
   ErrorCode error = compress((void*)iod->addr, iod->nr_sectors << SECTOR_SHIFT, &compressed);
   if (error != SUCCESS)
@@ -105,13 +105,13 @@ static int gzram_handle_write(const struct ublksrv_io_desc *iod, int fd, unsigne
     }
     compressed_size += comp_page->size;
   }
-  printf("Compression Results:\n");
-  printf("Original size: %zu bytes\n", compressed->original_size);
-  printf("Compressed size: %zu bytes\n", compressed_size);
-  printf("Compression ratio: %.2f\n", (float)compressed->original_size / compressed_size);
+//  printf("Compression Results:\n");
+//  printf("Original size: %zu bytes\n", compressed->original_size);
+//  printf("Compressed size: %zu bytes\n", compressed_size);
+//  printf("Compression ratio: %.2f\n", (float)compressed->original_size / compressed_size);
   free_compressed_data(compressed);
 
-  printf("\n");
+//  printf("\n");
 
   return iod_num_bytes(iod);
 }
@@ -136,6 +136,7 @@ static int gzram_handle_read_cpu(const struct ublksrv_io_desc *iod, int fd, unsi
   char *buf = malloc(PAGE_SIZE);
   for (int i = 0; i < nr_pages; ++i)
   {
+    void* iod_addr = (void*)(iod->addr + (i << PAGE_SHIFT));
     ssize_t comp_size = pread(fd, buf, PAGE_SIZE, index + i);
     if(comp_size < 0) {
       printf("read offset=%ud\n", index + i);
@@ -143,7 +144,16 @@ static int gzram_handle_read_cpu(const struct ublksrv_io_desc *iod, int fd, unsi
       free(buf);
       return (int)comp_size;
     }
-    LZ4_decompress_safe(buf, (void*)(iod->addr + (i << PAGE_SHIFT)), (int)comp_size, PAGE_SIZE);
+    if(comp_size == 0) {
+      memset(iod_addr, 0, PAGE_SIZE);
+      continue;
+    }
+    int ret = LZ4_decompress_safe(buf, iod_addr, (int)comp_size, PAGE_SIZE);
+    if(ret < 0) {
+      printf("error decompressing page %ud\n", index + i);
+      free(buf);
+      return -1;
+    }
   }
   free(buf);
 
@@ -252,10 +262,10 @@ int gzram_handle_io(const struct ublksrv_queue *q, const struct ublk_io_data *da
 //      printf("Flush\n");
       break;
     case UBLK_IO_OP_WRITE:
-      ret = gzram_handle_write_cpu(iod, fd, index, nr_pages);
+      ret = gzram_handle_write(iod, fd, index, nr_pages);
       break;
     case UBLK_IO_OP_READ:
-      ret = gzram_handle_read(iod, fd, index, nr_pages);
+      ret = gzram_handle_read_cpu(iod, fd, index, nr_pages);
       break;
     default:
       break;
