@@ -1777,6 +1777,9 @@ static int write_to_zspool(struct zram *zram, const char *src,
 	}
 	zram_slot_unlock(zram, index);
 
+	/* Update stats */
+	atomic64_inc(&zram->stats.pages_stored);
+
 	return 0;
 }
 
@@ -1848,9 +1851,6 @@ device_write(struct file *filp, const char *buf, size_t len, loff_t *off)
 	}
 
 	write_to_zspool(zram, src, index, len);
-
-	/* Update stats */
-	atomic64_inc(&zram->stats.pages_stored);
 
 	zram_slot_lock(zram, index);
 	zram_accessed(zram, index);
