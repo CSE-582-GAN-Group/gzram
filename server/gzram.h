@@ -58,10 +58,17 @@ static int gzram_handle_write_test(const struct ublksrv_io_desc *iod, int fd, un
 }
 
 static int gzram_handle_write_cpu(const struct ublksrv_io_desc *iod, int fd, unsigned int index, unsigned int nr_pages) {
-  char *buf = malloc(LZ4_compressBound(4096));
+  char *buf = malloc(LZ4_compressBound(PAGE_SIZE));
   for (int i = 0; i < nr_pages; ++i)
   {
-    int size = LZ4_compress_default((const void*)(iod->addr + (i << PAGE_SHIFT)), buf, 4096, LZ4_compressBound(4096));
+    int size = LZ4_compress_default((const void*)(iod->addr + (i << PAGE_SHIFT)), buf, PAGE_SIZE, LZ4_compressBound(PAGE_SIZE));
+    if(size > PAGE_SIZE) {
+      printf("page %d incompressible\n", index + i);
+    }
+    if(size == 0) {
+      printf("error compressing page %d\n", index + i);
+      return -1;
+    }
     ssize_t ret = pwrite(fd, buf, size, index + i);
     if(ret < 0) {
       printf("write offset=%ud\n", index + i);
@@ -87,6 +94,9 @@ static int gzram_handle_write(const struct ublksrv_io_desc *iod, int fd, unsigne
   for (int i = 0; i < compressed->num_pages; ++i)
   {
     CompressedPage *comp_page = &compressed->compressed_pages[i];
+    if(comp_page->size > PAGE_SIZE) {
+      printf("page %d incompressible\n", index + i);
+    }
     ssize_t ret = pwrite(fd, comp_page->data, comp_page->size, index + i);
     if(ret < 0) {
       printf("write offset=%ud\n", index + i);
@@ -123,17 +133,17 @@ static int gzram_handle_read_test(const struct ublksrv_io_desc *iod, int fd, uns
 }
 
 static int gzram_handle_read_cpu(const struct ublksrv_io_desc *iod, int fd, unsigned int index, unsigned int nr_pages) {
-  char *buf = malloc(4096);
+  char *buf = malloc(PAGE_SIZE);
   for (int i = 0; i < nr_pages; ++i)
   {
-    ssize_t comp_size = pread(fd, buf, 4096, index + i);
+    ssize_t comp_size = pread(fd, buf, PAGE_SIZE, index + i);
     if(comp_size < 0) {
       printf("read offset=%ud\n", index + i);
       perror("read error");
       free(buf);
       return (int)comp_size;
     }
-    LZ4_decompress_safe(buf, (void*)(iod->addr + (i << PAGE_SHIFT)), (int)comp_size, 4096);
+    LZ4_decompress_safe(buf, (void*)(iod->addr + (i << PAGE_SHIFT)), (int)comp_size, PAGE_SIZE);
   }
   free(buf);
 
@@ -176,7 +186,7 @@ static int gzram_handle_read(const struct ublksrv_io_desc *iod, int fd, unsigned
 
   if(nr_pages_to_decompress == 0) {
     printf("All zero pages\n");
-    memset((void*)iod->addr, 0, nr_pages*4096);
+    memset((void*)iod->addr, 0, iod_num_bytes(iod));
     free(compressed_pages);
     return iod_num_bytes(iod);
   }
@@ -184,7 +194,7 @@ static int gzram_handle_read(const struct ublksrv_io_desc *iod, int fd, unsigned
   CompressedData compressed = {
           .compressed_pages = compressed_pages,
           .num_pages = nr_pages_to_decompress,
-          .original_size = nr_pages_to_decompress*4096,
+          .original_size = nr_pages_to_decompress*PAGE_SIZE,
   };
 
   char *decomp_data;
@@ -194,11 +204,11 @@ static int gzram_handle_read(const struct ublksrv_io_desc *iod, int fd, unsigned
     free(compressed_pages[i].data);
   }
   free(compressed_pages);
-  assert(output_size == nr_pages*4096);
+  assert(output_size == nr_pages*PAGE_SIZE);
 
-  memset((void*)iod->addr, 0, nr_pages*4096);
+  memset((void*)iod->addr, 0, nr_pages*PAGE_SIZE);
   for(int i = 0; i < nr_pages_to_decompress; ++i) {
-    memcpy((void*)(iod->addr + (page_indices[i] << PAGE_SHIFT)), decomp_data + (i << PAGE_SHIFT), 4096);
+    memcpy((void*)(iod->addr + (page_indices[i] << PAGE_SHIFT)), decomp_data + (i << PAGE_SHIFT), PAGE_SIZE);
   }
 
   free(decomp_data);
@@ -245,7 +255,7 @@ int gzram_handle_io(const struct ublksrv_queue *q, const struct ublk_io_data *da
       ret = gzram_handle_write_cpu(iod, fd, index, nr_pages);
       break;
     case UBLK_IO_OP_READ:
-      ret = gzram_handle_read_cpu(iod, fd, index, nr_pages);
+      ret = gzram_handle_read(iod, fd, index, nr_pages);
       break;
     default:
       break;
