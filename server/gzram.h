@@ -6,7 +6,6 @@
 #include "ublksrv_utils.h"
 
 #include "../gpu/naive.cuh"
-#include "../gpu/example.cuh"
 
 #include "lz4.h"
 
@@ -31,7 +30,7 @@ int open_zspool(char* path) {
   int fd = open(path, O_RDWR);
   if (fd < 0) {
     perror("open zspool");
-    exit(1);
+    return -1;
   }
   return fd;
 }
@@ -268,7 +267,11 @@ int gzram_handle_io(const struct ublksrv_queue *q, const struct ublk_io_data *da
 //      printf("Flush\n");
       break;
     case UBLK_IO_OP_WRITE:
-      ret = gzram_handle_write(iod, fd, index, nr_pages);
+      if(iod_num_bytes(iod) >= 10*1024*1024) {
+        ret = gzram_handle_write(iod, fd, index, nr_pages);
+      } else {
+        ret = gzram_handle_write_cpu(iod, fd, index, nr_pages);
+      }
       break;
     case UBLK_IO_OP_READ:
       ret = gzram_handle_read_cpu(iod, fd, index, nr_pages);

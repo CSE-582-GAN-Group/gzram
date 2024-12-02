@@ -16,6 +16,8 @@
 #include "ublksrv.h"
 #include "ublksrv_utils.h"
 
+#include "../gpu/naive.cuh"
+
 #include "gzram.h"
 
 #define UBLKSRV_TGT_TYPE_GZRAM  0
@@ -88,17 +90,17 @@ static void gzram_set_parameters(struct ublksrv_ctrl_dev *cdev,
   struct ublk_params p = {
           .types = UBLK_PARAM_TYPE_BASIC | UBLK_PARAM_TYPE_DISCARD,
           .basic = {
-                  .logical_bs_shift	= 12,
-                  .physical_bs_shift	= 12,
-                  .io_opt_shift		= 12,
-                  .io_min_shift		= 9,
-                  .max_sectors		= info->max_io_buf_bytes >> 9,
-                  .dev_sectors		= dev->tgt.dev_size >> 9,
+                  .logical_bs_shift	= PAGE_SHIFT,
+                  .physical_bs_shift	= PAGE_SHIFT,
+                  .io_opt_shift		= PAGE_SHIFT,
+                  .io_min_shift		= PAGE_SHIFT,
+                  .max_sectors		= info->max_io_buf_bytes >> SECTOR_SHIFT,
+                  .dev_sectors		= dev->tgt.dev_size >> SECTOR_SHIFT,
           },
           .discard = {
-                  .max_discard_sectors	= UINT_MAX >> 9,
+                  .max_discard_sectors	= UINT_MAX >> SECTOR_SHIFT,
                   .max_discard_segments	= 1,
-                  .discard_granularity = 4096,
+                  .discard_granularity = PAGE_SIZE,
           },
   };
   int ret;
@@ -151,6 +153,13 @@ static int gzram_io_handler(struct ublksrv_ctrl_dev *ctrl_dev)
   ublksrv_ctrl_get_info(ctrl_dev);
   ublksrv_ctrl_dump(ctrl_dev, jbuf);
 
+  // Increase true queue size
+  struct ublk_params params;
+  ublksrv_ctrl_get_params(ctrl_dev, &params);
+  char cmd[4096];
+  sprintf(cmd, "echo %u > /sys/class/block/ublkb%d/queue/max_sectors_kb", params.basic.max_sectors, dinfo->dev_id);
+  system(cmd);
+
   /* wait until we are terminated */
   for (i = 0; i < dinfo->nr_hw_queues; i++)
     pthread_join(info_array[i].thread, &thread_ret);
@@ -187,10 +196,8 @@ static int gzram_init_tgt(struct ublksrv_dev *dev, int type, int argc,
   };
   strcpy(tgt_json.name, "gzram");
 
-  printf("Args: %d\n", argc);
-
-  if(argc != 2) {
-    fprintf(stderr, "Usage: %s <dev_size>\n", argv[0]);
+  if(argc != 3) {
+    fprintf(stderr, "Usage: %s <dev_size> <zspool_path>\n", argv[0]);
     return -1;
   }
 
@@ -206,16 +213,25 @@ static int gzram_init_tgt(struct ublksrv_dev *dev, int type, int argc,
     return -1;
   }
 
+  char *zspool_path = argv[2];
+
   if (type != UBLKSRV_TGT_TYPE_GZRAM)
     return -1;
 
-  tgt_json.dev_size = tgt->dev_size = 2UL * 1024 * 1024 * 1024;
+  int zspool_fd = open_zspool(zspool_path);
+  if(zspool_fd < 0) {
+    return -1;
+  }
+
+  tgt_json.dev_size = tgt->dev_size = dev_size;
   tgt->tgt_ring_depth = info->queue_depth;
   tgt->nr_fds = 1;
-  tgt->fds[1] = open_zspool("/dev/zspool0");
+  tgt->fds[1] = zspool_fd;
 
   ublksrv_json_write_dev_info(ublksrv_get_ctrl_dev(dev), jbuf, sizeof jbuf);
   ublksrv_json_write_target_base_info(jbuf, sizeof jbuf, &tgt_json);
+
+  cuda_initialize();
 
   return 0;
 }

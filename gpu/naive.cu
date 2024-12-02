@@ -139,6 +139,10 @@ void free_compressed_data(CompressedData *data)
     free(data);
 }
 
+void cuda_initialize() {
+  cudaFree(0);
+}
+
 ErrorCode compress(const char *input_data, size_t in_bytes, CompressedData **output)
 {
     // Create timing events
