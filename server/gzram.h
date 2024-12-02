@@ -19,12 +19,28 @@
 #define SECTORS_PER_PAGE_SHIFT  (PAGE_SHIFT - SECTOR_SHIFT)
 #define SECTORS_PER_PAGE	(1 << SECTORS_PER_PAGE_SHIFT)
 
+struct gzram {
+  long request_proc_time;
+};
+
+static struct gzram gzram;
+
 struct discard_ioctl_data {
   size_t offset;
   size_t nr_pages;
 };
 
 #define DISCARD_IOCTL_IN _IOW('z', 0x8F, struct discard_ioctl_data)
+
+static long elapsed_time_ms(struct timespec start, struct timespec end) {
+  long seconds = end.tv_sec - start.tv_sec;
+  long nanoseconds = end.tv_nsec - start.tv_nsec;
+  return (seconds * 1000) + (nanoseconds / 1000000);
+}
+
+void gzram_init_stats() {
+  gzram.request_proc_time = 0;
+}
 
 int open_zspool(char* path) {
   int fd = open(path, O_RDWR);
@@ -246,6 +262,10 @@ static int gzram_handle_discard(int fd, unsigned int index, unsigned int nr_page
 
 int gzram_handle_io(const struct ublksrv_queue *q, const struct ublk_io_data *data)
 {
+  struct timespec start, end;
+
+  clock_gettime(CLOCK_MONOTONIC, &start);
+
   const struct ublksrv_io_desc *iod = data->iod;
   int fd = zspool_fd(q);
 
@@ -281,6 +301,11 @@ int gzram_handle_io(const struct ublksrv_queue *q, const struct ublk_io_data *da
   }
 
   ublksrv_complete_io(q, data->tag, ret);
+
+  clock_gettime(CLOCK_MONOTONIC, &end);
+
+  gzram.request_proc_time += elapsed_time_ms(start, end);
+  printf("request_proc_time=%lu\n", gzram.request_proc_time);
 
   return 0;
 }
