@@ -139,6 +139,12 @@ void free_compressed_data(CompressedData *data)
     free(data);
 }
 
+// Initialize CUDA
+void cuda_initialize()
+{
+    cudaFree(0);
+}
+
 ErrorCode compress_pipelined(const char *input_data, size_t in_bytes,
                              CompressedData **output)
 {
