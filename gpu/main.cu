@@ -5,29 +5,69 @@
 #include <lz4hc.h>
 
 typedef struct {
-    char* data;
-    size_t size;
+    struct {
+        char* data;
+        size_t size;
+    } *compressed_pages;
+    size_t num_pages;
+    size_t original_size;
 } CPUCompressedData;
 
 ErrorCode cpu_compress(const char* input_data, size_t input_size, CPUCompressedData* output) {
-    // Calculate max compressed size needed
-    int max_dst_size = LZ4_compressBound(input_size);
+    // Calculate number of pages needed
+    const size_t num_pages = (input_size + PAGE_SIZE - 1) / PAGE_SIZE;
     
     // Initialize output structure
-    output->data = (char*)malloc(max_dst_size);
+    output->num_pages = num_pages;
+    output->original_size = input_size;
+    output->compressed_pages = (typeof(output->compressed_pages))malloc(num_pages * sizeof(*output->compressed_pages));
     
-    if (!output->data) {
+    if (!output->compressed_pages) {
         return MEMORY_ERROR;
     }
 
-    output->size = LZ4_compress_default(input_data, 
-                                      output->data, 
-                                      input_size, 
-                                      max_dst_size);
-    
-    if (output->size <= 0) {
-        free(output->data);
-        return COMPRESSION_ERROR;
+    // Initialize all pointers to NULL for proper cleanup on error
+    for (size_t i = 0; i < num_pages; i++) {
+        output->compressed_pages[i].data = NULL;
+        output->compressed_pages[i].size = 0;
+    }
+
+    // Compress each page
+    for (size_t i = 0; i < num_pages; i++) {
+        // Calculate size of this page
+        size_t page_size = (i == num_pages - 1) ? 
+            (input_size - (i * PAGE_SIZE)) : PAGE_SIZE;
+        
+        // Allocate space for compressed data
+        int max_dst_size = LZ4_compressBound(page_size);
+        output->compressed_pages[i].data = (char*)malloc(max_dst_size);
+        
+        if (!output->compressed_pages[i].data) {
+            // Cleanup previously allocated pages
+            for (size_t j = 0; j < i; j++) {
+                free(output->compressed_pages[j].data);
+            }
+            free(output->compressed_pages);
+            return MEMORY_ERROR;
+        }
+
+        // Compress this page
+        const char* page_input = input_data + (i * PAGE_SIZE);
+        output->compressed_pages[i].size = LZ4_compress_default(
+            page_input,
+            output->compressed_pages[i].data,
+            page_size,
+            max_dst_size
+        );
+
+        if (output->compressed_pages[i].size <= 0) {
+            // Cleanup on compression failure
+            for (size_t j = 0; j <= i; j++) {
+                free(output->compressed_pages[j].data);
+            }
+            free(output->compressed_pages);
+            return COMPRESSION_ERROR;
+        }
     }
     
     return SUCCESS;
@@ -39,9 +79,32 @@ ErrorCode cpu_decompress(const CPUCompressedData* input, char** output_data, siz
         return MEMORY_ERROR;
     }
 
-    int decompressed_size = LZ4_decompress_safe(input->data, *output_data, input->size, original_size);
-    
-    if (decompressed_size != original_size) {
+    char* current_output = *output_data;
+    size_t total_decompressed = 0;
+
+    // Decompress each page
+    for (size_t i = 0; i < input->num_pages; i++) {
+        size_t expected_size = (i == input->num_pages - 1) ? 
+            (original_size - (i * PAGE_SIZE)) : PAGE_SIZE;
+        
+        int decompressed_size = LZ4_decompress_safe(
+            input->compressed_pages[i].data,
+            current_output,
+            input->compressed_pages[i].size,
+            expected_size
+        );
+
+        if (decompressed_size != expected_size) {
+            free(*output_data);
+            *output_data = NULL;
+            return DECOMPRESSION_ERROR;
+        }
+
+        current_output += expected_size;
+        total_decompressed += expected_size;
+    }
+
+    if (total_decompressed != original_size) {
         free(*output_data);
         *output_data = NULL;
         return DECOMPRESSION_ERROR;
@@ -51,10 +114,14 @@ ErrorCode cpu_decompress(const CPUCompressedData* input, char** output_data, siz
 }
 
 void free_cpu_compressed_data(CPUCompressedData* data) {
-    if (data) {
-        free(data->data);
-        data->data = NULL;
-        data->size = 0;
+    if (data && data->compressed_pages) {
+        for (size_t i = 0; i < data->num_pages; i++) {
+            free(data->compressed_pages[i].data);
+        }
+        free(data->compressed_pages);
+        data->compressed_pages = NULL;
+        data->num_pages = 0;
+        data->original_size = 0;
     }
 }
 
@@ -118,7 +185,7 @@ int main(int argc, char *argv[])
     // GPU Compression
     CompressedData *gpu_compressed = NULL;
     clock_gettime(CLOCK_MONOTONIC, &start);
-    error = compress(original_data, data_size, &gpu_compressed);
+    error = compress_pipelined(original_data, data_size, &gpu_compressed);
     clock_gettime(CLOCK_MONOTONIC, &end);
     gpu_compress_time = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
 
@@ -132,9 +199,16 @@ int main(int argc, char *argv[])
     // Print compression results
     printf("\nCompression Results:\n");
     printf("Original size: %zu bytes\n", data_size);
-    printf("CPU Compressed size: %zu bytes (ratio: %.2f)\n", 
-           cpu_compressed.size, (float)data_size / cpu_compressed.size);
     
+    // Calculate total CPU compressed size
+    size_t cpu_total_size = 0;
+    for (size_t i = 0; i < cpu_compressed.num_pages; i++) {
+        cpu_total_size += cpu_compressed.compressed_pages[i].size;
+    }
+    printf("CPU Compressed size: %zu bytes (ratio: %.2f)\n", 
+           cpu_total_size, (float)data_size / cpu_total_size);
+    
+    // Calculate total GPU compressed size
     size_t gpu_total_size = 0;
     for (size_t i = 0; i < gpu_compressed->num_pages; i++) {
         gpu_total_size += gpu_compressed->compressed_pages[i].size;
@@ -161,9 +235,18 @@ int main(int argc, char *argv[])
     char *gpu_decompressed = NULL;
     size_t decompressed_size = 0;
     clock_gettime(CLOCK_MONOTONIC, &start);
-    error = decompress(gpu_compressed, &gpu_decompressed, &decompressed_size);
+    error = decompress_pipelined(gpu_compressed, &gpu_decompressed, &decompressed_size);
     clock_gettime(CLOCK_MONOTONIC, &end);
     gpu_decompress_time = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+
+    if (error != SUCCESS) {
+        fprintf(stderr, "GPU Decompression failed with error code: %d\n", error);
+        free(original_data);
+        free_cpu_compressed_data(&cpu_compressed);
+        free_compressed_data(gpu_compressed);
+        free(cpu_decompressed);
+        return 1;
+    }
 
     // Print timing results
     printf("\nTiming Results:\n");
@@ -182,7 +265,7 @@ int main(int argc, char *argv[])
     // Cleanup
     free(original_data);
     free(cpu_decompressed);
-    free(gpu_decompressed);
+    // free(gpu_decompressed);
     free_cpu_compressed_data(&cpu_compressed);
     free_compressed_data(gpu_compressed);
 

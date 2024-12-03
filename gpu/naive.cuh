@@ -1,13 +1,3 @@
-/*
-Some TODOs:
-- add better support to directly create CompressedData from compressed pages and sizes
-- lots of small optimizations. I can probably use less data structures and less memory allocations.
-- cudaMallocManaged()
-- Pipeline the compression and decompression steps
-- Group data into chunks and compress them one at a time
-- More async memcpys
-- change to ZSTD
-*/
 #pragma once
 
 #include <stdio.h>
@@ -69,9 +59,17 @@ CompressedData *create_compressed_data_with_references(
 // Helper function to free CompressedData
 void free_compressed_data(CompressedData *data);
 
-ErrorCode compress(const char *input_data, size_t in_bytes, CompressedData **output);
+ErrorCode compress_pipelined(const char *input_data, size_t in_bytes, CompressedData **output);
 
-ErrorCode decompress(const CompressedData *compressed_data, char **output_data, size_t *output_size);
+ErrorCode compress_improved_naive(const char *input_data, size_t in_bytes, CompressedData **output);
+
+ErrorCode compress_naive(const char *input_data, size_t in_bytes, CompressedData **output);
+
+ErrorCode decompress_pipelined(const CompressedData *compressed_data, char **output_data, size_t *output_size);
+
+ErrorCode decompress_improved_naive(const CompressedData *compressed_data, char **output_data, size_t *output_size);
+
+ErrorCode decompress_naive(const CompressedData *compressed_data, char **output_data, size_t *output_size);
 
 // Helper function to print data
 void print_data(const char *data, size_t size, const char *label);
