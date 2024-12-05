@@ -14,5 +14,6 @@ target_link_libraries(gzram_server PRIVATE ${LIBURING_LIBRARY} ${UBLKSRV})
 target_link_libraries(gzram_server PRIVATE cuda_example cuda_comp_naive)
 target_include_directories(gzram_server PRIVATE ${LZ4_INCLUDE_DIR})
 target_link_libraries(gzram_server PRIVATE ${LZ4_LIBRARY})
+target_compile_definitions(gzram_server PUBLIC _GNU_SOURCE)
 
 set_target_properties(gzram_server PROPERTIES CUDA_STANDARD 11)
