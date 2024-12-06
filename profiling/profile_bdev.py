@@ -1,33 +1,28 @@
 import subprocess
 from pathlib import Path
+import sys
+import re
 
-bdev_name = 'zram0'
-input_file = '/home/cc/dickens_1G'
+WRITE_TIME_PATTERN = re.compile(rb'write time: (.*)')
+READ_TIME_PATTERN = re.compile(rb'read time: (.*)')
 
-bdev_sys = Path('/sys/block') / bdev_name
+if len(sys.argv) != 2:
+    print('usage: needs path')
+    exit(1)
 
-class TimeTracker:    
-    def __init__(self):
-        self.last_time = self.read_time()
+bdev_name = sys.argv[1]
+input_path = Path('/home/cc/silesia_1G/dickens')
+bdev_path = f'/dev/{bdev_name}'
 
-    def read_time(self):
-        path = bdev_sys / 'stat'
-        stats = path.read_text().split()
-        return int(stats[9])
-
-    def get_time_elapsed(self):
-        time = self.read_time()
-        elapsed = time - self.last_time
-        self.last_time = time
-        return elapsed
-
-time_tracker = TimeTracker()
+sizes = []
 times = []
 
-for exponent in range(12, 30):
-    bs = 2 ** exponent
-    subprocess.run(f"sudo dd if={input_file} of=/dev/{bdev_name} bs={bs} count=1 oflag=direct", shell=True)
-    time = time_tracker.get_time_elapsed()
-    times.append(time)
+for exponent in range(12, 30+2, 2):
+    bs = 2**exponent
+    proc = subprocess.run(f"sudo ../build/tests/test_write_read_file {bdev_path} {input_path} {bs}", shell=True, stdout=subprocess.PIPE)
+    # time = WRITE_TIME_PATTERN.match(proc.stdout).group(1)
+    # print(proc.stdout)
+    time = READ_TIME_PATTERN.search(proc.stdout).group(1)
+    times.append(float(time))
 
 print(times)
