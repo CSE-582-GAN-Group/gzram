@@ -158,7 +158,11 @@ static int gzram_io_handler(struct ublksrv_ctrl_dev *ctrl_dev)
   ublksrv_ctrl_get_params(ctrl_dev, &params);
   char cmd[4096];
   sprintf(cmd, "echo %u > /sys/class/block/ublkb%d/queue/max_sectors_kb", params.basic.max_sectors, dinfo->dev_id);
-  system(cmd);
+  ret = system(cmd);
+  if(ret != 0) {
+    printf("Error setting max_sectors_kb\n");
+    return -EIO;
+  }
 
   /* wait until we are terminated */
   for (i = 0; i < dinfo->nr_hw_queues; i++)

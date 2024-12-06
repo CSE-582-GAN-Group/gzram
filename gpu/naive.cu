@@ -145,10 +145,16 @@ void cuda_initialize()
     cudaFree(0);
 }
 
+void cuda_free(void *ptr) {
+  cudaFree(ptr);
+}
+
 ErrorCode compress_pipelined(const char *input_data, size_t in_bytes,
                              CompressedData **output)
 {
+#ifdef DEBUG
     printf("\n=== Pipelined Compression ===\n");
+#endif
     int num_batches = 5;
     int num_streams = 3;
 
@@ -398,7 +404,8 @@ ErrorCode compress_pipelined(const char *input_data, size_t in_bytes,
 
 ErrorCode compress_improved_naive(const char *input_data, size_t in_bytes, CompressedData **output)
 {
-    printf("\n=== Improved Naive Compression ===\n");
+//    printf("\n=== Improved Naive Compression ===\n");
+
     // Create timing events
     cudaEvent_t start, stop;
     float milliseconds = 0;
@@ -659,7 +666,7 @@ ErrorCode compress_improved_naive(const char *input_data, size_t in_bytes, Compr
 
 ErrorCode compress_naive(const char *input_data, size_t in_bytes, CompressedData **output)
 {
-    printf("\n=== Naive Compression ===\n");
+//    printf("\n=== Naive Compression ===\n");
     cudaStream_t stream;
     CHECK_CUDA(cudaStreamCreate(&stream));
 
@@ -1016,7 +1023,7 @@ ErrorCode decompress_pipelined(const CompressedData *compressed_data, char **out
 
 ErrorCode decompress_improved_naive(const CompressedData *compressed_data, char **output_data, size_t *output_size)
 {
-    printf("\n=== Improved Naive Decompression ===\n");
+//    printf("\n=== Improved Naive Decompression ===\n");
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
@@ -1265,7 +1272,7 @@ ErrorCode decompress_improved_naive(const CompressedData *compressed_data, char 
 
 ErrorCode decompress_naive(const CompressedData *compressed_data, char **output_data, size_t *output_size)
 {
-    printf("\n=== Naive Decompression ===\n");
+//    printf("\n=== Naive Decompression ===\n");
     // Timing variables
     float milliseconds;
     cudaEvent_t start, stop;

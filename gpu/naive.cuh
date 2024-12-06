@@ -61,6 +61,8 @@ void free_compressed_data(CompressedData *data);
 
 void cuda_initialize();
 
+void cuda_free(void *ptr);
+
 ErrorCode compress_pipelined(const char *input_data, size_t in_bytes, CompressedData **output);
 
 ErrorCode compress_improved_naive(const char *input_data, size_t in_bytes, CompressedData **output);

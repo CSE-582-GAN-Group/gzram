@@ -36,10 +36,48 @@ struct discard_ioctl_data {
 
 #define DISCARD_IOCTL_IN _IOW('z', 0x8F, struct discard_ioctl_data)
 
+static long time_ms(struct timespec time) {
+  return (time.tv_sec * 1000) + (time.tv_nsec / 1000000);
+}
+
 static long elapsed_time_ms(struct timespec start, struct timespec end) {
   long seconds = end.tv_sec - start.tv_sec;
   long nanoseconds = end.tv_nsec - start.tv_nsec;
   return (seconds * 1000) + (nanoseconds / 1000000);
+}
+
+//static uint64_t elapsed_time_us(struct timespec start, struct timespec end) {
+//  uint64_t seconds = end.tv_sec - start.tv_sec;
+//  uint64_t nanoseconds = end.tv_nsec - start.tv_nsec;
+//  return (seconds * 1000000) + (nanoseconds / 1000);
+//}
+
+struct timespec add_timespec(struct timespec t1, struct timespec t2) {
+  struct timespec result;
+
+  result.tv_sec = t1.tv_sec + t2.tv_sec;
+  result.tv_nsec = t1.tv_nsec + t2.tv_nsec;
+
+  if (result.tv_nsec >= 1000000000L) {
+    result.tv_sec += result.tv_nsec / 1000000000L;
+    result.tv_nsec %= 1000000000L;
+  }
+
+  return result;
+}
+
+struct timespec subtract_timespec(struct timespec t1, struct timespec t2) {
+  struct timespec result;
+
+  result.tv_sec = t1.tv_sec - t2.tv_sec;
+  result.tv_nsec = t1.tv_nsec - t2.tv_nsec;
+
+  if (result.tv_nsec < 0) {
+    result.tv_sec -= 1;
+    result.tv_nsec += 1000000000L;
+  }
+
+  return result;
 }
 
 void gzram_init_stats() {
@@ -108,7 +146,7 @@ static int gzram_handle_write_test(const struct ublksrv_io_desc *iod, int fd, un
 }
 
 static int gzram_handle_write_cpu(const struct ublksrv_io_desc *iod, int fd, unsigned int index, unsigned int nr_pages) {
-  printf("CPU Write, index=%d, nr_pages=%d\n", index, nr_pages);
+//  printf("CPU Write, index=%d, nr_pages=%d\n", index, nr_pages);
 
   char *buf = malloc(LZ4_compressBound(PAGE_SIZE));
   for (int i = 0; i < nr_pages; ++i)
@@ -121,9 +159,9 @@ static int gzram_handle_write_cpu(const struct ublksrv_io_desc *iod, int fd, uns
     ssize_t ret;
     if(size >= PAGE_SIZE) {
       printf("writing page %d incompressible\n", index + i);
-      pwrite(fd, iod_page_addr(iod, i), PAGE_SIZE, index + i);
+      ret = pwrite(fd, iod_page_addr(iod, i), PAGE_SIZE, index + i);
     } else {
-      pwrite(fd, buf, size, index + i);
+      ret = pwrite(fd, buf, size, index + i);
     }
     if(ret < 0) {
       printf("write offset=%ud\n", index + i);
@@ -141,7 +179,7 @@ static int gzram_handle_write_cpu(const struct ublksrv_io_desc *iod, int fd, uns
 static int gzram_handle_write_gpu(const struct ublksrv_io_desc *iod, int fd, unsigned int index, unsigned int nr_pages) {
   struct timespec start, end;
 
-  printf("GPU Write, index=%d, nr_pages=%d\n", index, nr_pages);
+//  printf("GPU Write, index=%d, nr_pages=%d\n", index, nr_pages);
 
   clock_gettime(CLOCK_MONOTONIC, &start);
 
@@ -160,18 +198,19 @@ static int gzram_handle_write_gpu(const struct ublksrv_io_desc *iod, int fd, uns
   clock_gettime(CLOCK_MONOTONIC, &start);
 
   size_t compressed_size = 0;
+  unsigned long num_zero_pages = 0;
   for (int i = 0; i < compressed->num_pages; ++i)
   {
     CompressedPage *comp_page = &compressed->compressed_pages[i];
     ssize_t ret;
     unsigned long element;
     if(comp_page->size >= PAGE_SIZE) {
-      printf("page %d incompressible\n", index + i);
+//      printf("page %d incompressible\n", index + i);
       ret = pwrite(fd, iod_page_addr(iod, i), PAGE_SIZE, index + i);
     } else {
-//      if(page_same_filled(iod_page_addr(iod, i), &element)) {
-//        printf("zero page\n");
-//      }
+      if(page_same_filled(iod_page_addr(iod, i), &element)) {
+        ++num_zero_pages;
+      }
 //      printf("pwrite offset=%ud size=%lu\n", index+i, comp_page->size);
       ret = pwrite(fd, comp_page->data, comp_page->size, index + i);
       if(ret < comp_page->size) {
@@ -196,6 +235,8 @@ static int gzram_handle_write_gpu(const struct ublksrv_io_desc *iod, int fd, uns
   clock_gettime(CLOCK_MONOTONIC, &end);
   gzram.zspool_write_time += elapsed_time_ms(start, end);
 
+//  printf("Number of zero pages: %lu\n", num_zero_pages);
+
   return iod_num_bytes(iod);
 }
 
@@ -216,9 +257,16 @@ static int gzram_handle_read_test(const struct ublksrv_io_desc *iod, int fd, uns
 }
 
 static int gzram_handle_read_cpu(const struct ublksrv_io_desc *iod, int fd, unsigned int index, unsigned int nr_pages) {
-  printf("CPU Read, index=%d, nr_pages=%d\n", index, nr_pages);
+//  printf("CPU Read, index=%d, nr_pages=%d\n", index, nr_pages);
 
   struct timespec start, end;
+//  uint64_t zspool_time_us = 0;
+//  uint64_t decompression_time_us = 0;
+  struct timespec zspool_time, decompression_time;
+  zspool_time.tv_sec = 0;
+  zspool_time.tv_nsec = 0;
+  decompression_time.tv_sec = 0;
+  decompression_time.tv_nsec = 0;
 
   char *buf = malloc(PAGE_SIZE);
   for (int i = 0; i < nr_pages; ++i)
@@ -237,14 +285,14 @@ static int gzram_handle_read_cpu(const struct ublksrv_io_desc *iod, int fd, unsi
       continue;
     }
     if(comp_size == PAGE_SIZE) {
-      printf("reading page %d incompressible\n", index + i);
+//      printf("reading page %d incompressible\n", index + i);
 //      memset(iod_page_addr(iod, i), 0, PAGE_SIZE);
       memcpy(iod_page_addr(iod, i), buf, PAGE_SIZE);
       continue;
     }
 
     clock_gettime(CLOCK_MONOTONIC, &end);
-    gzram.zspool_read_time += elapsed_time_ms(start, end);
+    zspool_time = add_timespec(zspool_time, subtract_timespec(end, start));
 
     clock_gettime(CLOCK_MONOTONIC, &start);
 
@@ -256,15 +304,21 @@ static int gzram_handle_read_cpu(const struct ublksrv_io_desc *iod, int fd, unsi
     }
 
     clock_gettime(CLOCK_MONOTONIC, &end);
-    gzram.cpu_decompression_time += elapsed_time_ms(start, end);
+//    decompression_time_us += elapsed_time_us(start, end);
+//    gzram.cpu_decompression_time += elapsed_time_ms(start, end);
+    decompression_time = add_timespec(decompression_time, subtract_timespec(end, start));
   }
   free(buf);
+
+  gzram.zspool_read_time += time_ms(zspool_time);
+  gzram.cpu_decompression_time += time_ms(decompression_time);
+//  gzram.cpu_decompression_time += (long)(decompression_time_us / 1000);
 
   return iod_num_bytes(iod);
 }
 
 static int gzram_handle_read_gpu(const struct ublksrv_io_desc *iod, int fd, unsigned int index, unsigned int nr_pages) {
-  printf("Read, index=%d, nr_pages=%d\n", index, nr_pages);
+//  printf("Read, index=%d, nr_pages=%d\n", index, nr_pages);
   CompressedPage* compressed_pages = malloc(sizeof(CompressedPage) * nr_pages);
   int* page_indices = malloc(sizeof(int) * nr_pages);
   int* incompressible_pages = malloc(sizeof(int) * nr_pages);
@@ -287,7 +341,7 @@ static int gzram_handle_read_gpu(const struct ublksrv_io_desc *iod, int fd, unsi
       continue;
     }
     if(len == PAGE_SIZE) {
-      printf("incompressible page\n");
+//      printf("incompressible page\n");
       incompressible_pages[num_incompressible_pages] = i;
       ++num_incompressible_pages;
     }
@@ -307,7 +361,7 @@ static int gzram_handle_read_gpu(const struct ublksrv_io_desc *iod, int fd, unsi
   int nr_pages_to_decompress = page_index;
 
   if(nr_pages_to_decompress == 0) {
-    printf("All zero pages\n");
+//    printf("All zero pages\n");
     memset((void*)iod->addr, 0, iod_num_bytes(iod));
     free(compressed_pages);
     free(incompressible_pages);
@@ -322,7 +376,7 @@ static int gzram_handle_read_gpu(const struct ublksrv_io_desc *iod, int fd, unsi
 
   char *decomp_data;
   size_t output_size;
-  ErrorCode error = decompress_naive(&compressed, &decomp_data, &output_size);
+  ErrorCode error = decompress_improved_naive(&compressed, &decomp_data, &output_size);
   if (error != SUCCESS)
   {
     fprintf(stderr, "Compression failed with error code: %d\n", error);
@@ -348,13 +402,13 @@ static int gzram_handle_read_gpu(const struct ublksrv_io_desc *iod, int fd, unsi
     if(len < 0) {
       printf("pread, offset=%d\n", index + i);
       perror("Read error");
-      free(decomp_data);
+      cuda_free(decomp_data);
       free(incompressible_pages);
       return (int)len;
     }
   }
 
-  free(decomp_data);
+  cuda_free(decomp_data);
   free(incompressible_pages);
 
   return iod_num_bytes(iod);
@@ -390,7 +444,7 @@ int gzram_handle_io(const struct ublksrv_queue *q, const struct ublk_io_data *da
 
   int ret = 0;
 
-  printf("start_sector=%llud, nr_sectors=%ud \n", iod->start_sector, iod->nr_sectors);
+//  printf("start_sector=%llud, nr_sectors=%ud \n", iod->start_sector, iod->nr_sectors);
 
   switch (ublksrv_get_op(iod)) {
     case UBLK_IO_OP_DISCARD:
@@ -407,7 +461,11 @@ int gzram_handle_io(const struct ublksrv_queue *q, const struct ublk_io_data *da
       }
       break;
     case UBLK_IO_OP_READ:
-      ret = gzram_handle_read_cpu(iod, fd, index, nr_pages);
+//      if(iod_num_bytes(iod) >= 10*1024*1024) {
+//        ret = gzram_handle_read_gpu(iod, fd, index, nr_pages);
+//      } else {
+        ret = gzram_handle_read_cpu(iod, fd, index, nr_pages);
+//      }
       break;
     default:
       break;
@@ -424,6 +482,7 @@ int gzram_handle_io(const struct ublksrv_queue *q, const struct ublk_io_data *da
 //  printf("cpu_decompression_time=%lu\n", gzram.cpu_decompression_time);
 //  printf("zspool_read_time=%lu\n", gzram.zspool_read_time);
 //  printf("zspool_write_time=%lu\n", gzram.zspool_write_time);
+//  printf("\n");
 
   return 0;
 }
