@@ -80,6 +80,10 @@ struct timespec subtract_timespec(struct timespec t1, struct timespec t2) {
   return result;
 }
 
+void update_timer(struct timespec *t, struct timespec start, struct timespec end) {
+  *t = add_timespec(*t, subtract_timespec(end, start));
+}
+
 void gzram_init_stats() {
   gzram.request_proc_time = 0;
   gzram.gpu_compression_time = 0;
@@ -130,7 +134,7 @@ static bool page_same_filled(void *ptr, unsigned long *element) {
   return true;
 }
 
-static int gzram_handle_write_test(const struct ublksrv_io_desc *iod, int fd, unsigned int index, unsigned int nr_pages) {
+static int gzram_handle_write_no_comp(const struct ublksrv_io_desc *iod, int fd, unsigned int index, unsigned int nr_pages) {
   for(int i = 0; i < nr_pages; ++i) {
     ssize_t ret = pwrite(fd, (const void*)(iod->addr + (i << PAGE_SHIFT)), PAGE_SIZE, index + i);
     if(ret < 0) {
@@ -240,7 +244,7 @@ static int gzram_handle_write_gpu(const struct ublksrv_io_desc *iod, int fd, uns
   return iod_num_bytes(iod);
 }
 
-static int gzram_handle_read_test(const struct ublksrv_io_desc *iod, int fd, unsigned int index, unsigned int nr_pages) {
+static int gzram_handle_read_no_decomp(const struct ublksrv_io_desc *iod, int fd, unsigned int index, unsigned int nr_pages) {
   for(int i = 0; i < nr_pages; ++i) {
     char *page = malloc(4096);
     ssize_t len = pread(fd, page, PAGE_SIZE, index + i);
@@ -262,11 +266,7 @@ static int gzram_handle_read_cpu(const struct ublksrv_io_desc *iod, int fd, unsi
   struct timespec start, end;
 //  uint64_t zspool_time_us = 0;
 //  uint64_t decompression_time_us = 0;
-  struct timespec zspool_time, decompression_time;
-  zspool_time.tv_sec = 0;
-  zspool_time.tv_nsec = 0;
-  decompression_time.tv_sec = 0;
-  decompression_time.tv_nsec = 0;
+  struct timespec zspool_time = {}, decompression_time = {};
 
   char *buf = malloc(PAGE_SIZE);
   for (int i = 0; i < nr_pages; ++i)
@@ -292,7 +292,7 @@ static int gzram_handle_read_cpu(const struct ublksrv_io_desc *iod, int fd, unsi
     }
 
     clock_gettime(CLOCK_MONOTONIC, &end);
-    zspool_time = add_timespec(zspool_time, subtract_timespec(end, start));
+    update_timer(&zspool_time, start, end);
 
     clock_gettime(CLOCK_MONOTONIC, &start);
 
@@ -304,15 +304,12 @@ static int gzram_handle_read_cpu(const struct ublksrv_io_desc *iod, int fd, unsi
     }
 
     clock_gettime(CLOCK_MONOTONIC, &end);
-//    decompression_time_us += elapsed_time_us(start, end);
-//    gzram.cpu_decompression_time += elapsed_time_ms(start, end);
-    decompression_time = add_timespec(decompression_time, subtract_timespec(end, start));
+    update_timer(&decompression_time, start, end);
   }
   free(buf);
 
   gzram.zspool_read_time += time_ms(zspool_time);
   gzram.cpu_decompression_time += time_ms(decompression_time);
-//  gzram.cpu_decompression_time += (long)(decompression_time_us / 1000);
 
   return iod_num_bytes(iod);
 }
