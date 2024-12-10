@@ -8,7 +8,7 @@ find_library(LZ4_LIBRARY NAMES lz4)
 
 include_directories(../gpu)
 
-add_executable(gzram_server gzram_server.c)
+add_executable(gzram_server gzram_server.c gzram.c)
 
 target_link_libraries(gzram_server PRIVATE ${LIBURING_LIBRARY} ${UBLKSRV})
 target_link_libraries(gzram_server PRIVATE gpu_comp)
