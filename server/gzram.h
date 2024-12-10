@@ -21,13 +21,16 @@
 
 struct gzram {
   long request_proc_time;
+  long cpu_compression_time;
   long gpu_compression_time;
   long cpu_decompression_time;
+  long gpu_decompression_time;
   long zspool_write_time;
   long zspool_read_time;
+  long read_copy_overhead_time;
 };
 
-static struct gzram gzram;
+static struct gzram gzram = {0};
 
 struct discard_ioctl_data {
   size_t offset;
@@ -82,14 +85,6 @@ struct timespec subtract_timespec(struct timespec t1, struct timespec t2) {
 
 void update_timer(struct timespec *t, struct timespec start, struct timespec end) {
   *t = add_timespec(*t, subtract_timespec(end, start));
-}
-
-void gzram_init_stats() {
-  gzram.request_proc_time = 0;
-  gzram.gpu_compression_time = 0;
-  gzram.cpu_decompression_time = 0;
-  gzram.zspool_write_time = 0;
-  gzram.zspool_read_time = 0;
 }
 
 int open_zspool(char* path) {
@@ -152,14 +147,22 @@ static int gzram_handle_write_no_comp(const struct ublksrv_io_desc *iod, int fd,
 static int gzram_handle_write_cpu(const struct ublksrv_io_desc *iod, int fd, unsigned int index, unsigned int nr_pages) {
 //  printf("CPU Write, index=%d, nr_pages=%d\n", index, nr_pages);
 
+  struct timespec start, end;
+  struct timespec zspool_time = {}, compression_time = {};
+
   char *buf = malloc(LZ4_compressBound(PAGE_SIZE));
   for (int i = 0; i < nr_pages; ++i)
   {
+    clock_gettime(CLOCK_MONOTONIC, &start);
     int size = LZ4_compress_default(iod_page_addr(iod, i), buf, PAGE_SIZE, LZ4_compressBound(PAGE_SIZE));
     if(size == 0) {
       printf("error compressing page %d\n", index + i);
       return -1;
     }
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    update_timer(&compression_time, start, end);
+
+    clock_gettime(CLOCK_MONOTONIC, &start);
     ssize_t ret;
     if(size >= PAGE_SIZE) {
       printf("writing page %d incompressible\n", index + i);
@@ -172,10 +175,18 @@ static int gzram_handle_write_cpu(const struct ublksrv_io_desc *iod, int fd, uns
       perror("write error");
       return (int)ret;
     }
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    update_timer(&zspool_time, start, end);
   }
   free(buf);
 
+  clock_gettime(CLOCK_MONOTONIC, &start);
   fsync(fd);
+  clock_gettime(CLOCK_MONOTONIC, &end);
+  update_timer(&zspool_time, start, end);
+
+  gzram.zspool_write_time += time_ms(zspool_time);
+  gzram.cpu_compression_time += time_ms(compression_time);
 
   return iod_num_bytes(iod);
 }
@@ -315,6 +326,8 @@ static int gzram_handle_read_cpu(const struct ublksrv_io_desc *iod, int fd, unsi
 }
 
 static int gzram_handle_read_gpu(const struct ublksrv_io_desc *iod, int fd, unsigned int index, unsigned int nr_pages) {
+  struct timespec start, end;
+
 //  printf("Read, index=%d, nr_pages=%d\n", index, nr_pages);
   CompressedPage* compressed_pages = malloc(sizeof(CompressedPage) * nr_pages);
   int* page_indices = malloc(sizeof(int) * nr_pages);
@@ -322,6 +335,8 @@ static int gzram_handle_read_gpu(const struct ublksrv_io_desc *iod, int fd, unsi
   int num_incompressible_pages = 0;
 
   int page_index = 0;
+
+  clock_gettime(CLOCK_MONOTONIC, &start);
 
   for(int i = 0; i < nr_pages; ++i) {
     void* page_data = malloc(PAGE_SIZE);
@@ -355,6 +370,9 @@ static int gzram_handle_read_gpu(const struct ublksrv_io_desc *iod, int fd, unsi
     ++page_index;
   }
 
+  clock_gettime(CLOCK_MONOTONIC, &end);
+  gzram.zspool_read_time += elapsed_time_ms(start, end);
+
   int nr_pages_to_decompress = page_index;
 
   if(nr_pages_to_decompress == 0) {
@@ -371,9 +389,11 @@ static int gzram_handle_read_gpu(const struct ublksrv_io_desc *iod, int fd, unsi
           .original_size = nr_pages_to_decompress*PAGE_SIZE,
   };
 
+  clock_gettime(CLOCK_MONOTONIC, &start);
+
   char *decomp_data;
   size_t output_size;
-  ErrorCode error = decompress_improved_naive(&compressed, &decomp_data, &output_size);
+  ErrorCode error = decompress_pipelined(&compressed, &decomp_data, &output_size);
   if (error != SUCCESS)
   {
     fprintf(stderr, "Compression failed with error code: %d\n", error);
@@ -382,11 +402,16 @@ static int gzram_handle_read_gpu(const struct ublksrv_io_desc *iod, int fd, unsi
     return -1;
   }
 
+  clock_gettime(CLOCK_MONOTONIC, &end);
+  gzram.gpu_decompression_time += elapsed_time_ms(start, end);
+
   for(int i = 0; i < nr_pages_to_decompress; ++i) {
     free(compressed_pages[i].data);
   }
   free(compressed_pages);
   assert(output_size == nr_pages*PAGE_SIZE);
+
+  clock_gettime(CLOCK_MONOTONIC, &start);
 
   memset((void*)iod->addr, 0, nr_pages*PAGE_SIZE);
   for(int i = 0; i < nr_pages_to_decompress; ++i) {
@@ -404,6 +429,9 @@ static int gzram_handle_read_gpu(const struct ublksrv_io_desc *iod, int fd, unsi
       return (int)len;
     }
   }
+
+  clock_gettime(CLOCK_MONOTONIC, &end);
+  gzram.read_copy_overhead_time += elapsed_time_ms(start, end);
 
   cuda_free(decomp_data);
   free(incompressible_pages);
@@ -451,6 +479,8 @@ int gzram_handle_io(const struct ublksrv_queue *q, const struct ublk_io_data *da
 //      printf("Flush\n");
       break;
     case UBLK_IO_OP_WRITE:
+//      printf("Write, tag=%d\n", data->tag);
+      // ret = iod_num_bytes(iod);
       if(iod_num_bytes(iod) >= 10*1024*1024) {
         ret = gzram_handle_write_gpu(iod, fd, index, nr_pages);
       } else {
@@ -458,11 +488,14 @@ int gzram_handle_io(const struct ublksrv_queue *q, const struct ublk_io_data *da
       }
       break;
     case UBLK_IO_OP_READ:
-//      if(iod_num_bytes(iod) >= 10*1024*1024) {
-//        ret = gzram_handle_read_gpu(iod, fd, index, nr_pages);
-//      } else {
+//      printf("Read, tag=%d\n", data->tag);
+      // memset((void*)iod->addr, 0, iod_num_bytes(iod));
+      // ret = iod_num_bytes(iod);
+      if(iod_num_bytes(iod) >= 10*1024*1024) {
+        ret = gzram_handle_read_gpu(iod, fd, index, nr_pages);
+      } else {
         ret = gzram_handle_read_cpu(iod, fd, index, nr_pages);
-//      }
+      }
       break;
     default:
       break;
@@ -474,12 +507,18 @@ int gzram_handle_io(const struct ublksrv_queue *q, const struct ublk_io_data *da
 
   gzram.request_proc_time += elapsed_time_ms(start, end);
 
-//  printf("request_proc_time=%lu\n", gzram.request_proc_time);
-//  printf("gpu_compression_time=%lu\n", gzram.gpu_compression_time);
-//  printf("cpu_decompression_time=%lu\n", gzram.cpu_decompression_time);
-//  printf("zspool_read_time=%lu\n", gzram.zspool_read_time);
-//  printf("zspool_write_time=%lu\n", gzram.zspool_write_time);
-//  printf("\n");
+  printf("-- stats --\n");
+  printf("request_proc_time=%lu\n", gzram.request_proc_time);
+  printf("-- write times --\n");
+  printf("cpu_compression_time=%lu\n", gzram.cpu_compression_time);
+  printf("gpu_compression_time=%lu\n", gzram.gpu_compression_time);
+  printf("zspool_write_time=%lu\n", gzram.zspool_write_time);
+  printf("-- read times --\n");
+  printf("zspool_read_time=%lu\n", gzram.zspool_read_time);
+  printf("gpu_decompression_time=%lu\n", gzram.gpu_decompression_time);
+  printf("cpu_decompression_time=%lu\n", gzram.cpu_decompression_time);
+  printf("read_copy_overhead_time=%lu\n", gzram.read_copy_overhead_time);
+  printf("\n");
 
   return 0;
 }

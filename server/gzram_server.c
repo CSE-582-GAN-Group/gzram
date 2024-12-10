@@ -222,7 +222,7 @@ static int gzram_init_tgt(struct ublksrv_dev *dev, int type, int argc,
   if (type != UBLKSRV_TGT_TYPE_GZRAM)
     return -1;
 
-  gzram_init_stats();
+//  gzram_init_stats();
 
   int zspool_fd = open_zspool(zspool_path);
   if(zspool_fd < 0) {
