@@ -16,7 +16,7 @@
 #include "ublksrv.h"
 #include "ublksrv_utils.h"
 
-#include "../gpu/naive.cuh"
+#include "../gpu/gpu_comp.cuh"
 
 #include "gzram.h"
 

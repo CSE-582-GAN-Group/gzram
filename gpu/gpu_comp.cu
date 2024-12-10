@@ -1,4 +1,4 @@
-#include "naive.cuh"
+#include "gpu_comp.cuh"
 
 #include <cuda_runtime.h>
 #include "nvcomp/lz4.h"

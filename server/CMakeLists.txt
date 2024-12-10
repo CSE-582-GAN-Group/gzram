@@ -11,7 +11,7 @@ include_directories(../gpu)
 add_executable(gzram_server gzram_server.c)
 
 target_link_libraries(gzram_server PRIVATE ${LIBURING_LIBRARY} ${UBLKSRV})
-target_link_libraries(gzram_server PRIVATE cuda_example cuda_comp_naive)
+target_link_libraries(gzram_server PRIVATE gpu_comp)
 target_include_directories(gzram_server PRIVATE ${LZ4_INCLUDE_DIR})
 target_link_libraries(gzram_server PRIVATE ${LZ4_LIBRARY})
 target_compile_definitions(gzram_server PUBLIC _GNU_SOURCE)

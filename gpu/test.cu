@@ -1,5 +1,5 @@
 
-#include "naive.cuh"
+#include "gpu_comp.cuh"
 #include <time.h>
 #include <lz4.h>
 #include <lz4hc.h>
