@@ -2,7 +2,21 @@
 
 gzram is a compressed memory block device that mimics the functionality of the [Linux zram kernel module](https://docs.kernel.org/admin-guide/blockdev/zram.html) while offloading large compression requests to userspace GPUs to accelerate those requests.
 
+## Repository structure
+
+The repository is organized into the following subdirectories:
+
+- `gpu` - our GPU compression/decompression library built on top of nvCOMP in CUDA C
+- `server` - the userspace daemon server for the userspace block device
+- `zspool` - our zspool Linux kernel module for storing compressed pages
+- `tests` - programs to perform simple tests on the block device
+- `profiling` - scripts for profiling the block device
+
 ## Prerequisites
+
+### System
+
+At minimum, the system must be running Linux kernel version >= 6.0 (preferably on a Debian-based distribution) and be equipped with an NVIDIA GPU. For our tests, we used a node of type `gpu_p100` on [ChameleonCloud](https://www.chameleoncloud.org/).
 
 ### Kernel
 
@@ -23,7 +37,7 @@ These can be installed with
 $ sudo apt install -y liblz4-dev liburing-dev
 ```
 
-However, sometimes this only installs liburing 2.0, which is not sufficient for ublksrv. To install liburing2.2, uninstall the current version, and then install it from source as such
+However, sometimes this only installs liburing 2.0, which is not sufficient for ublksrv. To install liburing 2.2, uninstall the current version, and then install it from source as such
 
 ```shell
 $ git clone https://github.com/axboe/liburing.git && cd liburing
@@ -61,7 +75,7 @@ TODO
 
 The userspace daemon component is built with cmake. Run the following in the root directory of this repository
 
-```
+```shell
 $ mkdir build && cd build
 $ cmake -DCMAKE_BUILD_TYPE=Release ..
 $ cmake --build .
@@ -82,7 +96,7 @@ This will build a `zspool_drv.ko` module in the `zspool` directory that can be l
 $ sudo insmod zspool_drv.ko
 ```
 
-### Running
+## Running
 
 Run `./setup_driver.sh` to ensure the necessary kernel modules are loaded, namely ublk and zspool.
 
@@ -106,6 +120,12 @@ You can also use the provided `test_write_read` test program to write data to th
 
 ```bash
 $ ./build/tests/test_write_read /dev/ublkb0 my_file 524288000
+```
+
+You can also discard data from the block device as usual, which will release the pages from the zspool. For example, to discard all data,
+
+```bash
+$ blkdiscard /dev/ublkb0
 ```
 
 ### Getting memory stats
