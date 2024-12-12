@@ -10,6 +10,8 @@
 
 #include "gzram.h"
 
+#define GPU_COMPRESSION_THRESHOLD_BYTES (10*1024*1024)
+
 struct gzram {
   long request_proc_time;
   long cpu_compression_time;
@@ -108,7 +110,7 @@ static int gzram_handle_write_cpu(const struct ublksrv_io_desc *iod, int fd, uns
     clock_gettime(CLOCK_MONOTONIC, &start);
     ssize_t ret;
     if(size >= PAGE_SIZE) {
-      printf("writing page %d incompressible\n", index + i);
+//      printf("writing page %d incompressible\n", index + i);
       ret = pwrite(fd, iod_page_addr(iod, i), PAGE_SIZE, index + i);
     } else {
       ret = pwrite(fd, buf, size, index + i);
@@ -424,7 +426,7 @@ int gzram_handle_io(const struct ublksrv_queue *q, const struct ublk_io_data *da
     case UBLK_IO_OP_WRITE:
 //      printf("Write, tag=%d\n", data->tag);
       // ret = iod_num_bytes(iod);
-      if(iod_num_bytes(iod) >= 10*1024*1024) {
+      if(iod_num_bytes(iod) >= GPU_COMPRESSION_THRESHOLD_BYTES) {
         ret = gzram_handle_write_gpu(iod, fd, index, nr_pages);
       } else {
         ret = gzram_handle_write_cpu(iod, fd, index, nr_pages);
@@ -434,7 +436,7 @@ int gzram_handle_io(const struct ublksrv_queue *q, const struct ublk_io_data *da
 //      printf("Read, tag=%d\n", data->tag);
       // memset((void*)iod->addr, 0, iod_num_bytes(iod));
       // ret = iod_num_bytes(iod);
-      if(iod_num_bytes(iod) >= 10*1024*1024) {
+      if(false) {
         ret = gzram_handle_read_gpu(iod, fd, index, nr_pages);
       } else {
         ret = gzram_handle_read_cpu(iod, fd, index, nr_pages);
@@ -450,18 +452,18 @@ int gzram_handle_io(const struct ublksrv_queue *q, const struct ublk_io_data *da
 
   gzram.request_proc_time += elapsed_time_ms(start, end);
 
-  printf("-- stats --\n");
-  printf("request_proc_time=%lu\n", gzram.request_proc_time);
-  printf("-- write times --\n");
-  printf("cpu_compression_time=%lu\n", gzram.cpu_compression_time);
-  printf("gpu_compression_time=%lu\n", gzram.gpu_compression_time);
-  printf("zspool_write_time=%lu\n", gzram.zspool_write_time);
-  printf("-- read times --\n");
-  printf("zspool_read_time=%lu\n", gzram.zspool_read_time);
-  printf("gpu_decompression_time=%lu\n", gzram.gpu_decompression_time);
-  printf("cpu_decompression_time=%lu\n", gzram.cpu_decompression_time);
-  printf("read_copy_overhead_time=%lu\n", gzram.read_copy_overhead_time);
-  printf("\n");
+//  printf("-- stats --\n");
+//  printf("request_proc_time=%lu\n", gzram.request_proc_time);
+//  printf("-- write times --\n");
+//  printf("cpu_compression_time=%lu\n", gzram.cpu_compression_time);
+//  printf("gpu_compression_time=%lu\n", gzram.gpu_compression_time);
+//  printf("zspool_write_time=%lu\n", gzram.zspool_write_time);
+//  printf("-- read times --\n");
+//  printf("zspool_read_time=%lu\n", gzram.zspool_read_time);
+//  printf("gpu_decompression_time=%lu\n", gzram.gpu_decompression_time);
+//  printf("cpu_decompression_time=%lu\n", gzram.cpu_decompression_time);
+//  printf("read_copy_overhead_time=%lu\n", gzram.read_copy_overhead_time);
+//  printf("\n");
 
   return 0;
 }

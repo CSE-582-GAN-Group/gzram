@@ -41,10 +41,6 @@ static void sig_handler(int sig)
 
 /*
  * io handler for each ublkdev's queue
- *
- * Just for showing how to build ublksrv target's io handling, so callers
- * can apply these APIs in their own thread context for making one ublk
- * block device.
  */
 static void *gzram_io_handler_fn(void *data)
 {
@@ -222,8 +218,6 @@ static int gzram_init_tgt(struct ublksrv_dev *dev, int type, int argc,
   if (type != UBLKSRV_TGT_TYPE_GZRAM)
     return -1;
 
-//  gzram_init_stats();
-
   int zspool_fd = open_zspool(zspool_path);
   if(zspool_fd < 0) {
     return -1;
@@ -253,24 +247,12 @@ static int gzram_handle_io_async(const struct ublksrv_queue *q,
   return gzram_handle_io(q, data);
 }
 
-void *null_alloc_io_buf(const struct ublksrv_queue *q, int tag, int size)
-{
-  return malloc(size);
-}
-
-void null_free_io_buf(const struct ublksrv_queue *q, void *buf, int tag)
-{
-  free(buf);
-}
-
 static struct ublksrv_tgt_type gzram_tgt_type = {
         .type	= UBLKSRV_TGT_TYPE_GZRAM,
         .name	=  "gzram",
         .init_tgt = gzram_init_tgt,
         .deinit_tgt = gzram_deinit_tgt,
         .handle_io_async = gzram_handle_io_async,
-        //.alloc_io_buf = null_alloc_io_buf,
-        //.free_io_buf = null_free_io_buf,
 };
 
 int main(int argc, char *argv[])
@@ -286,25 +268,6 @@ int main(int argc, char *argv[])
   };
   struct ublksrv_ctrl_dev *dev;
   int ret;
-  static const struct option longopts[] = {
-          { "buf",		1,	NULL, 'b' },
-          { "need_get_data",	1,	NULL, 'g' },
-          { NULL }
-  };
-  int opt;
-  bool use_buf = false;
-
-  while ((opt = getopt_long(argc, argv, ":bg",
-                            longopts, NULL)) != -1) {
-    switch (opt) {
-      case 'b':
-        use_buf = true;
-        break;
-      case 'g':
-        data.flags |= UBLK_F_NEED_GET_DATA;
-        break;
-    }
-  }
 
   data.tgt_argc = argc;
   data.tgt_argv = argv;
@@ -313,11 +276,6 @@ int main(int argc, char *argv[])
     error(EXIT_FAILURE, errno, "signal");
   if (signal(SIGINT, sig_handler) == SIG_ERR)
     error(EXIT_FAILURE, errno, "signal");
-
-  if (use_buf) {
-    gzram_tgt_type.alloc_io_buf = null_alloc_io_buf;
-    gzram_tgt_type.free_io_buf = null_free_io_buf;
-  }
 
   pthread_mutex_init(&jbuf_lock, NULL);
   dev = ublksrv_ctrl_init(&data);

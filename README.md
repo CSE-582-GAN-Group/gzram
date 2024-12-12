@@ -65,9 +65,17 @@ $ wget https://developer.download.nvidia.com/compute/cuda/12.6.3/local_installer
 $ sudo sh cuda_12.6.3_560.35.05_linux.run
 ```
 
-### nvComp
+### nvCOMP
 
-TODO
+The nvCOMP GPU compression library can be installed from the [nvCOMP download page](https://developer.nvidia.com/nvcomp-downloads). For example, to install on Linux for CUDA 12:
+
+```shell
+$ wget https://developer.download.nvidia.com/compute/nvcomp/4.1.1/local_installers/nvcomp-local-repo-debian12-4.1.1_4.1.1-1_amd64.deb
+$ sudo dpkg -i nvcomp-local-repo-debian12-4.1.1_4.1.1-1_amd64.deb
+$ sudo cp /var/cuda-repo-debian12-4-1-local/nvcomp-*-keyring.gpg /usr/share/keyrings/
+$ sudo apt-get update
+$ sudo apt-get -y install nvcomp
+```
 
 ## Building
 
@@ -90,19 +98,23 @@ $ cd zspool
 $ make
 ```
 
+Warning: do not run `make` with `sudo`; if you do, you may need to install your Linux headers.
+
 This will build a `zspool_drv.ko` module in the `zspool` directory that can be loaded with
 
 ```shell
 $ sudo insmod zspool_drv.ko
 ```
 
+This will create the device `/dev/zspool0`.
+
 ## Running
 
 Run `./setup_driver.sh` to ensure the necessary kernel modules are loaded, namely ublk and zspool.
 
-Then, run `./create.sh` to start the userspace daemon.
+Then, run `./create.sh` to start the userspace daemon. The daemon will be connected to the zspool device at `/dev/zspool0`, but this can be changed in the script. The default capacity of the device is 2G, but this could be changed by running `./create.sh <capacity_in_bytes>`.
 
-The gzram block device will now be available on `/dev/ublkbX` where `X` is the device ID.
+The gzram block device will now be available on `/dev/ublkbX` where `X` is the device ID (typically X is 0).
 
 If the server crashes, the stored data will still be recoverable from the `/dev/zspool0` device.
 
@@ -110,16 +122,16 @@ If the server crashes, the stored data will still be recoverable from the `/dev/
 
 ### Writing and reading data
 
-You can use `dd` to perform basic tests. Set `bs` to the size the request should be, and set `count` to the number of requests. GPU is used for requests above 10MB. For example, the following command tests writing 500MB to gzram
+You can use `dd` to perform basic tests. Set `bs` to the size the request should be, and set `count` to the number of requests. GPU is used for compression requests above 10MB. For example, the following command tests writing 128MB to gzram
 
 ```bash
-$ sudo dd if=my_file of=/dev/ublkb0 bs=500M count=1
+$ sudo dd if=my_file of=/dev/ublkb0 bs=128M count=1
 ```
 
 You can also use the provided `test_write_read` test program to write data to the device and then read it back. This is somewhat better for getting write/read timing information, since it only measures the time for the actual block device operation, while `dd` also includes the time to read/write the file. For example, to write and then read 500MB from `my_file` into `/dev/ublk0`,
 
 ```bash
-$ ./build/tests/test_write_read /dev/ublkb0 my_file 524288000
+$ ./build/tests/test_write_read /dev/ublkb0 my_file 134217728
 ```
 
 You can also discard data from the block device as usual, which will release the pages from the zspool. For example, to discard all data,
@@ -140,7 +152,7 @@ The first number outputted is the total amount of memory being represented (i.e.
 
 ### Running stock zram
 
-To run stock Linux zram with the same configuration as gzram, you can use the commands
+To run stock Linux zram with the same configuration as gzram for comparison, you can use the commands
 
 ```shell
 $ sudo modprobe zram

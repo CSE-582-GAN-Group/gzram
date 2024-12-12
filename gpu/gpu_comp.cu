@@ -841,7 +841,7 @@ ErrorCode compress_naive(const char *input_data, size_t in_bytes, CompressedData
 
 ErrorCode decompress_pipelined(const CompressedData *compressed_data, char **output_data, size_t *output_size)
 {
-    printf("\n=== Pipelined Decompression ===\n");
+//    printf("\n=== Pipelined Decompression ===\n");
     const int NUM_STREAMS = 3;  // Number of concurrent streams
     const int NUM_BATCHES = 10; // Number of batches to split the original data into
 
