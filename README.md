@@ -110,13 +110,26 @@ This will create the device `/dev/zspool0`.
 
 ## Running
 
-Run `./setup_driver.sh` to ensure the necessary kernel modules are loaded, namely ublk and zspool.
+Run `./setup_driver.sh` to ensure the necessary kernel modules are loaded, namely ublk and zspool
 
 Then, run `./create.sh` to start the userspace daemon. The daemon will be connected to the zspool device at `/dev/zspool0`, but this can be changed in the script. The default capacity of the device is 2G, but this could be changed by running `./create.sh <capacity_in_bytes>`.
 
 The gzram block device will now be available on `/dev/ublkbX` where `X` is the device ID (typically X is 0).
 
-If the server crashes, the stored data will still be recoverable from the `/dev/zspool0` device.
+### Manual setup
+
+You can also set up the device manually. First, initialize the zspool device. For example, if creating it with capacity of 2GB, do
+
+```bash
+echo 1 | sudo tee -a /sys/class/zspool/zspool0/reset # reset the zspool device
+echo 2147483648 | sudo tee -a /sys/class/zspool/zspool0/disksize # set the capacity of the pool
+```
+
+You can also create another zspool device by `sudo cat /sys/class/zspool-control/hot_add` and remove a device by `echo <device_id> | sudo tee -a /sys/class/zspool-control/hot_remove`.
+
+Then, start the server with `sudo ./build/server/gzram_server <capacity> <zspool_device_path>`. For example, `sudo ./build/server/gzram_server 2147483648 /dev/zspool0`. The capacity set here should match the capacity of the zspool device.
+
+If the server crashes, the stored data will still be recoverable from the `/dev/zspool0` device. So, you can simply restart the server without resetting the zspool device. 
 
 ## Testing
 
