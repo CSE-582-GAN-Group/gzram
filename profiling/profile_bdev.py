@@ -1,3 +1,6 @@
+"""Program to profile a block device.
+"""
+
 import subprocess
 from pathlib import Path
 import sys
@@ -7,7 +10,7 @@ WRITE_TIME_PATTERN = re.compile(rb'write time: (.*)')
 READ_TIME_PATTERN = re.compile(rb'read time: (.*)')
 
 if len(sys.argv) != 3:
-    print(f'usage: {sys.argv[0]} <device_path> <input_file>')
+    print(f'usage: {sys.argv[0]} <device_name> <input_file>')
     exit(1)
 
 bdev_name = sys.argv[1]
