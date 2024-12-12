@@ -1,4 +1,6 @@
 /*
+ * Zspool character device, based on the following:
+ *
  * Compressed RAM block device
  *
  * Copyright (C) 2008, 2009, 2010  Nitin Gupta

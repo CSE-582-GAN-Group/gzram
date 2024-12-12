@@ -42,9 +42,6 @@ struct discard_ioctl_data {
 
 #define DISCARD_IOCTL_IN _IOW('z', 0x8F, struct discard_ioctl_data)
 
-//static int zram_major;
-//static const char *default_compressor = CONFIG_ZRAM_DEF_COMP;
-
 /* Module params (documentation at end) */
 static unsigned int num_devices = 1;
 /*
@@ -181,27 +178,27 @@ static inline void zram_fill_page(void *ptr, unsigned long len,
 	memset_l(ptr, value, len / sizeof(unsigned long));
 }
 
-//static bool page_same_filled(void *ptr, unsigned long *element)
-//{
-//	unsigned long *page;
-//	unsigned long val;
-//	unsigned int pos, last_pos = PAGE_SIZE / sizeof(*page) - 1;
-//
-//	page = (unsigned long *)ptr;
-//	val = page[0];
-//
-//	if (val != page[last_pos])
-//		return false;
-//
-//	for (pos = 1; pos < last_pos; pos++) {
-//		if (val != page[pos])
-//			return false;
-//	}
-//
-//	*element = val;
-//
-//	return true;
-//}
+static bool page_same_filled(void *ptr, unsigned long *element)
+{
+	unsigned long *page;
+	unsigned long val;
+	unsigned int pos, last_pos = PAGE_SIZE / sizeof(*page) - 1;
+
+	page = (unsigned long *)ptr;
+	val = page[0];
+
+	if (val != page[last_pos])
+		return false;
+
+	for (pos = 1; pos < last_pos; pos++) {
+		if (val != page[pos])
+			return false;
+	}
+
+	*element = val;
+
+	return true;
+}
 
 static ssize_t initstate_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
@@ -601,7 +598,6 @@ static ssize_t reset_store(struct device *dev,
 	int ret;
 	unsigned short do_reset;
 	struct zram *zram;
-//	struct gendisk *disk;
 
 	ret = kstrtou16(buf, 10, &do_reset);
 	if (ret)
@@ -611,26 +607,8 @@ static ssize_t reset_store(struct device *dev,
 		return -EINVAL;
 
 	zram = dev_to_zram(dev);
-//	disk = zram->disk;
-//
-//	mutex_lock(&disk->open_mutex);
-//	/* Do not reset an active device or claimed device */
-//	if (disk_openers(disk) || zram->claim) {
-//		mutex_unlock(&disk->open_mutex);
-//		return -EBUSY;
-//	}
-//
-//	/* From now on, anyone can't open /dev/zram[0-9] */
-//	zram->claim = true;
-//	mutex_unlock(&disk->open_mutex);
-//
-//	/* Make sure all the pending I/O are finished */
-//	sync_blockdev(disk->part0);
+
 	zram_reset_device(zram);
-//
-//	mutex_lock(&disk->open_mutex);
-//	zram->claim = false;
-//	mutex_unlock(&disk->open_mutex);
 
 	return len;
 }
@@ -654,15 +632,6 @@ static int read_from_zspool(struct zram *zram, void *dst, unsigned long index)
 
 	handle = zram_get_handle(zram, index);
 	if (!handle || zram_test_flag(zram, index, ZRAM_SAME)) {
-		//		unsigned long value;
-		//		void *mem;
-		//
-		//		value = handle ? zram_get_element(zram, index) : 0;
-		//		mem = kmap_local_page(page);
-		//		zram_fill_page(mem, PAGE_SIZE, value);
-		//		kunmap_local(mem);
-		//		return PAGE_SIZE;
-		// TODO
 		return 0;
 	}
 
@@ -684,8 +653,6 @@ static int write_to_zspool(struct zram *zram, const char *src,
 
 	unsigned long element = 0;
 	enum zram_pageflags flags = 0;
-
-	// TODO page_same_filled
 
 	if (IS_ERR_VALUE(handle))
 		handle = zs_malloc(zram->mem_pool, comp_len,
@@ -815,9 +782,6 @@ device_write(struct file *filp, const char *buf, size_t len, loff_t *off)
 	zram_accessed(zram, index);
 	zram_slot_unlock(zram, index);
 
-//	printk("Write index=%lu len=%lu\n", index, len);
-//	printk("Pages stored=%llu\n", atomic64_read(&zram->stats.pages_stored));
-
 	return len;
 }
 
@@ -840,9 +804,6 @@ static long device_ioctl (struct file *filp, unsigned int cmd, unsigned long arg
 		if( copy_from_user(&data, (struct discard_ioctl_data *) arg,
 				   sizeof(struct discard_ioctl_data)) )
 			return -EFAULT;
-
-//		printk("ioctl discard. offset=%lu, nr_pages=%lu",
-//		       data.offset, data.nr_pages);
 
 		if(data.offset+data.nr_pages-1 >= zram->disksize >> PAGE_SHIFT) {
 			return -ENOMEM;
@@ -944,7 +905,6 @@ static int zram_add(void)
 
 out_cleanup_disk:
 	put_device(dev);
-//out_free_idr:
 	idr_remove(&zram_index_idr, device_id);
 out_free_dev:
 	kfree(zram);
