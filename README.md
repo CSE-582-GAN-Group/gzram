@@ -145,7 +145,7 @@ You can use `dd` to perform basic tests. Set `bs` to the size the request should
 $ sudo dd if=my_file of=/dev/ublkb0 bs=128M count=1
 ```
 
-You can also use the provided `test_write_read` test program to write data to the device and then read it back. This is somewhat better for getting write/read timing information, since it only measures the time for the actual block device operation, while `dd` also includes the time to read/write the file. For example, to write and then read 500MB from `my_file` into `/dev/ublk0`,
+You can also use the provided `test_write_read` test program to write data to the device and then read it back. This is somewhat better for getting write/read timing information, since it only measures the time for the actual block device operation, while `dd` also includes the time to read/write the file. For example, to write and then read 128MB from `my_file` into `/dev/ublk0`,
 
 ```bash
 $ ./build/tests/test_write_read /dev/ublkb0 my_file 134217728
