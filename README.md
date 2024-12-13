@@ -108,9 +108,13 @@ $ sudo insmod zspool_drv.ko
 
 This will create the device `/dev/zspool0`.
 
+### Build script
+
+Alternatively, run `build.sh` to build both components.
+
 ## Running
 
-Run `./setup_driver.sh` to ensure the necessary kernel modules are loaded, namely ublk and zspool
+Run `./setup_driver.sh` to ensure the necessary kernel modules are loaded, namely ublk and zspool.
 
 Then, run `./create.sh` to start the userspace daemon. The daemon will be connected to the zspool device at `/dev/zspool0`, but this can be changed in the script. The default capacity of the device is 2G, but this could be changed by running `./create.sh <capacity_in_bytes>`.
 
