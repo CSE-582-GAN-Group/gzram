@@ -107,10 +107,12 @@ static inline void zram_set_element(struct zram *zram, u32 index,
 	zram->table[index].element = element;
 }
 
+#if 0
 static unsigned long zram_get_element(struct zram *zram, u32 index)
 {
 	return zram->table[index].element;
 }
+#endif
 
 static size_t zram_get_obj_size(struct zram *zram, u32 index)
 {
@@ -171,6 +173,7 @@ static inline void update_used_max(struct zram *zram,
 					  &cur_max, pages));
 }
 
+#if 0
 static inline void zram_fill_page(void *ptr, unsigned long len,
 					unsigned long value)
 {
@@ -199,6 +202,7 @@ static bool page_same_filled(void *ptr, unsigned long *element)
 
 	return true;
 }
+#endif
 
 static ssize_t initstate_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
